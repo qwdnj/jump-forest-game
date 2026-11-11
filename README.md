@@ -32,3 +32,13 @@
 - 分数与记录存在浏览器 localStorage，换设备不同步
 - 自适应分辨率：掉帧会自动降档渲染
 - 手机上从选单进游戏后，按浏览器返回键回到选单
+
+## 安装包（APK）
+
+仓库里的 `android/` 是个很薄的 WebView 外壳（Java，无第三方依赖），构建时把 `index.html`、`jump/`、`monkey/` 拷进 assets。
+每次 push 到 main，GitHub Actions 会自动编译并挂到 Releases：
+
+<https://github.com/qwdnj/jump-forest-game/releases/latest>
+
+下载 `app-debug.apk` 安装即可（debug 签名，安装时需要在手机系统设置里允许「安装未知来源应用」）。
+APK 里的网页和线上版本是同一份源码，改了网页重新构建就会同步。
