@@ -103,6 +103,7 @@ const CFG = {
   trailDots: 14,
   trailLife: 0.32,
   springChance: 0.16,
+  swayChance: 0.17,      // 会左右摆动的柱子出现概率
   springBonus: 3,
   poolMax: 300,
   fireflyBase: 16,
@@ -395,7 +396,7 @@ let hillFar = null, hillNear = null;
 let treeFar = null, treeMid = null;
 let groundTex = null, glowSprite = null;
 let playerSprite = null, cloudSprite = null;
-let vignette = null, starField = null;
+let vignette = null, starField = null, fgLayer = null;
 
 function drawPineOn(g, x, baseY, h, color, trunk) {
   const w = h * 0.52;
@@ -637,6 +638,40 @@ function rebuildSky() {
   sunGrad.addColorStop(1.00, 'rgba(255, 240, 170, 0)');
 }
 
+/* 最前景的草丛剪影：视差比树林更快，画面一下就有纵深了 */
+function buildForeground() {
+  const h = Math.max(34, Math.min(96, H * 0.14));
+  const stripW = 1200;
+  const L = makeLayerCanvas(stripW, h, 1.4);
+  const g = L.g;
+  const n = 52;
+  for (let i = 0; i < n; i++) {
+    const x = (i + rnd(i * 2.7 + 1.3) * 0.9) * (stripW / n);
+    const hh = h * (0.40 + rnd(i * 5.1 + 2.9) * 0.60);
+    const bw = 6 + rnd(i * 8.3 + 4.1) * 12;
+    const lean = (rnd(i * 3.3 + 6.7) - 0.5) * 0.55;
+    const a = 0.60 + rnd(i * 6.1 + 5.5) * 0.32;
+    g.fillStyle = 'rgba(16, 40, 24, ' + a.toFixed(2) + ')';
+    g.beginPath();
+    g.moveTo(x - bw / 2, h + 2);
+    g.quadraticCurveTo(x - bw * 0.2 + lean * 30, h - hh * 0.58, x + lean * 40, h - hh);
+    g.quadraticCurveTo(x + bw * 0.24 + lean * 28, h - hh * 0.55, x + bw / 2, h + 2);
+    g.closePath();
+    g.fill();
+  }
+  return { c: L.c, w: stripW, h: h };
+}
+
+function drawForeground() {
+  if (!fgLayer) return;
+  let off = (camX * 1.25) % fgLayer.w;
+  if (off < 0) off += fgLayer.w;
+  const top = H - fgLayer.h;
+  for (let x = -off; x < W; x += fgLayer.w) {
+    ctx.drawImage(fgLayer.c, x, top, fgLayer.w, fgLayer.h);
+  }
+}
+
 function buildScene() {
   const ty = topY();
 
@@ -661,6 +696,7 @@ function buildScene() {
 
   vignette = buildVignette();
   starField = buildStars();
+  fgLayer = buildForeground();
 
   // 角色精灵依赖 DPR，每次重建都强制刷新
   playerSprite = buildPlayerSprite();
@@ -889,7 +925,10 @@ let jumpCount = 0;                            // 本局起跳次数（用于新�
 let chargeFullBeeped = false;
 let hitstop = 0;
 let overAt = 0, pauseAt = 0, shake = 0, tutorialDone = false;
+let moveT = 0;             // 摆动柱子的统一时钟（fixedUpdate 推进，保证判定和预览一致）
 let scorePop = 0;
+let punch = 0;              // 命中时镜头轻微推近
+let swayTipShown = false;   // 第一次遇到摆动柱的提示
 let eyeGlow = 0;
 let recentMisses = 0;
 let milestoneShown = 0;
@@ -922,6 +961,11 @@ function mercyRadius() {
   return CFG.mercyPx - deepProg() * 2.5;
 }
 
+/* 柱子在世界时间 t 的横坐标（静止柱子就是它自己） */
+function platXAt(p, t) {
+  return p.sway ? p.baseX + Math.sin(t * p.sway.spd + p.sway.ph) * p.sway.amp : p.x;
+}
+
 function makePlatform(last) {
   const prog = Math.min(score / 30, 1);
   const deep = deepProg();
@@ -937,12 +981,23 @@ function makePlatform(last) {
   const gMax = Math.min(214, 148 + prog * 55 + deep * 14) * (1 - help);
   const gap = rand(gMin, gMax);
   const isSpring = score >= 3 && Math.random() < CFG.springChance;
+  // 会左右摆动的柱子：落点预览会按「落地那一刻」的位置算，所以不会骗人
+  const sway = (!isSpring && score >= 22 && Math.random() < CFG.swayChance)
+    ? {
+        amp: 8 + prog * 8 + deep * 4,
+        spd: 0.55 + Math.random() * 0.5,
+        ph: Math.random() * Math.PI * 2
+      }
+    : null;
+  const bx = last.baseX + last.w + gap;
 
   return {
-    x: last.x + last.w + gap,
+    x: sway ? bx + Math.sin(moveT * sway.spd + sway.ph) * sway.amp : bx,
+    baseX: bx,
     w: w,
     squash: 0,
     spring: isSpring,
+    sway: sway,
     sprite: null,
     spriteH: 0,
     glow: 0
@@ -962,7 +1017,9 @@ function ensurePlatforms() {
   }
 }
 
-function buildPlatformSprite(p, bucket, columnH) {
+function buildPlatformSprite(kind, bucket, columnH) {
+  const isSpring = kind === 'spring';
+  const isSway = kind === 'sway';
   const padX = 14;
   const top = PLAT_TOP_PAD;
   const w = bucket + padX * 2;
@@ -975,12 +1032,18 @@ function buildPlatformSprite(p, bucket, columnH) {
   const width = bucket;
 
   const grd = g.createLinearGradient(left, 0, left + width, 0);
-  if (p.spring) {
+  if (isSpring) {
     grd.addColorStop(0.00, '#2f6b35');
     grd.addColorStop(0.12, '#4c9145');
     grd.addColorStop(0.52, '#69b556');
     grd.addColorStop(0.88, '#3f7d3a');
     grd.addColorStop(1.00, '#295c2b');
+  } else if (isSway) {
+    grd.addColorStop(0.00, '#4a5f66');
+    grd.addColorStop(0.12, '#708c92');
+    grd.addColorStop(0.52, '#93b3b8');
+    grd.addColorStop(0.88, '#62808a');
+    grd.addColorStop(1.00, '#41565f');
   } else {
     grd.addColorStop(0.00, '#5f3a1c');
     grd.addColorStop(0.12, '#8a5629');
@@ -995,7 +1058,8 @@ function buildPlatformSprite(p, bucket, columnH) {
   g.beginPath();
   g.rect(left, 0, width, h);
   g.clip();
-  g.strokeStyle = p.spring ? 'rgba(20, 60, 25, 0.26)' : 'rgba(48, 26, 10, 0.26)';
+  g.strokeStyle = isSpring ? 'rgba(20, 60, 25, 0.26)'
+    : (isSway ? 'rgba(28, 52, 62, 0.26)' : 'rgba(48, 26, 10, 0.26)');
   g.lineWidth = 1.6;
   for (let i = 1; i <= 3; i++) {
     const lx = left + width * i / 4;
@@ -1006,14 +1070,15 @@ function buildPlatformSprite(p, bucket, columnH) {
   }
   g.restore();
 
-  g.fillStyle = p.spring ? '#a6e07a' : '#cba06b';
+  g.fillStyle = isSpring ? '#a6e07a' : (isSway ? '#9fe0ef' : '#cba06b');
   g.fillRect(left, 0, width, 9);
   g.fillStyle = 'rgba(255, 245, 220, 0.45)';
   g.fillRect(left, 0, width, 2.5);
-  g.fillStyle = p.spring ? 'rgba(30, 80, 40, 0.30)' : 'rgba(60, 34, 14, 0.28)';
+  g.fillStyle = isSpring ? 'rgba(30, 80, 40, 0.30)'
+    : (isSway ? 'rgba(20, 56, 70, 0.30)' : 'rgba(60, 34, 14, 0.28)');
   g.fillRect(left, 9, width, 2);
 
-  if (p.spring) {
+  if (isSpring) {
     g.fillStyle = 'rgba(190, 240, 140, 0.55)';
     for (let i = 0; i < 4; i++) {
       const mx = left + width * (0.12 + i * 0.24);
@@ -1023,7 +1088,7 @@ function buildPlatformSprite(p, bucket, columnH) {
     }
   }
 
-  g.strokeStyle = p.spring ? '#3f8a35' : '#4f9b3f';
+  g.strokeStyle = isSpring ? '#3f8a35' : (isSway ? '#57b6c9' : '#4f9b3f');
   g.lineWidth = 2;
   g.lineCap = 'round';
   for (let i = 0; i < 3; i++) {
@@ -1044,11 +1109,12 @@ function buildPlatformSprite(p, bucket, columnH) {
 function getPlatformSprite(p) {
   const columnH = Math.ceil(H - topY() + 18);
   const bucket = Math.max(24, Math.round(p.w / PLAT_BUCKET) * PLAT_BUCKET);
-  const key = (p.spring ? 's' : 'w') + ':' + bucket + ':' + columnH;
+  const kind = p.spring ? 'spring' : (p.sway ? 'sway' : 'wood');
+  const key = kind + ':' + bucket + ':' + columnH;
   let sp = platSpriteCache.get(key);
   if (!sp) {
     if (platSpriteCache.size > 64) platSpriteCache.clear();
-    sp = buildPlatformSprite(p, bucket, columnH);
+    sp = buildPlatformSprite(kind, bucket, columnH);
     platSpriteCache.set(key, sp);
   }
   return sp;
@@ -1127,7 +1193,7 @@ function reset() {
   stopChargeSound();
   platforms = [];
   const firstW = 112;
-  platforms.push({ x: W * 0.2, w: firstW, squash: 0, spring: false, sprite: null, spriteH: 0, glow: 0 });
+  platforms.push({ x: W * 0.2, baseX: W * 0.2, w: firstW, squash: 0, spring: false, sway: null, sprite: null, spriteH: 0, glow: 0 });
   for (let i = 0; i < 4; i++) platforms.push(makePlatform(platforms[platforms.length - 1]));
 
   player = {
@@ -1141,7 +1207,8 @@ function reset() {
 
   camX = player.x - W * camAnchor();
   runBest = best;
-  score = 0; combo = 0; scorePop = 0;
+  score = 0; combo = 0; scorePop = 0; punch = 0; moveT = 0;
+  swayTipShown = false;
   displayScore = 0;
   dayT = 0; skyDayT = 0;
   rebuildSky();                    // 修复：重开一局时天色还停在黄昏
@@ -1466,6 +1533,7 @@ function doLand(p, ty, rescued) {
       vibrate(12);
       beep(240, 0.12, 'triangle', 0.12, 140);
       hitstop = CFG.hitstopMs / 2000;
+      punch = Math.max(punch, 0.4);
     } else if (p.spring) {
       const gain = CFG.springBonus + (perfect ? 1 : 0);
       score += gain;
@@ -1474,6 +1542,7 @@ function doLand(p, ty, rescued) {
         perfectCount++;
         recentMisses = Math.max(0, recentMisses - 1);
         eyeGlow = 1.2;
+      punch = Math.max(punch, 1);
       } else {
         combo = 0;
       }
@@ -1494,6 +1563,7 @@ function doLand(p, ty, rescued) {
       const gain = 2 + bonus;
       score += gain;
       eyeGlow = 1;
+      punch = Math.max(punch, 0.85);
       spawnRing(center, ty);
       spawnBurst(center, ty, '#ffd93b', '#fff3a0', 18);
       spawnPopup(center, ty - 80, '完美 +' + gain, '#ffd93b', 22);
@@ -1535,6 +1605,16 @@ function doLand(p, ty, rescued) {
     vibrate(6);
   }
   ensurePlatforms();
+
+  // 第一次遇到会动的柱子，提示一句
+  if (!swayTipShown) {
+    const at = platforms.indexOf(p);
+    const nx = platforms[at + 1];
+    if (nx && nx.sway) {
+      swayTipShown = true;
+      spawnPopup(nx.baseX + nx.w / 2, ty - 118, '蓝色柱子会左右移动', '#9fe0ef', 15);
+    }
+  }
 }
 
 function gameOver() {
@@ -1554,6 +1634,17 @@ function gameOver() {
  * ============================================================ */
 function fixedUpdate(dt) {
   const ty = topY();
+
+  // 摆动的柱子先动：落地判定用的是动完之后的位置
+  moveT += dt;
+  for (let i = 0; i < platforms.length; i++) {
+    const p = platforms[i];
+    if (!p.sway) continue;
+    const before = p.x;
+    p.x = p.baseX + Math.sin(moveT * p.sway.spd + p.sway.ph) * p.sway.amp;
+    // 站在上面的人跟着一起走，不会平白滑下去
+    if (player.state === 'idle' && player.plat === p) player.x += p.x - before;
+  }
 
   if (player.state === 'jump' || player.state === 'fall') {
     const prevY = player.y;
@@ -1644,6 +1735,7 @@ function visualUpdate(dt, now) {
     if (charge >= 0.995 && !chargeFullBeeped) {
       chargeFullBeeped = true;
       beep(1600, 0.07, 'sine', 0.09);
+      vibrate(22);                 // 蓄满给一次触感，闭着眼睛也能感觉到
     }
 
     if (player.plat) player.plat.squash = Math.max(player.plat.squash, charge * 0.7);
@@ -1766,6 +1858,11 @@ function visualUpdate(dt, now) {
     scorePop -= scorePop * Math.min(1, dt * 9);
     if (scorePop < 0.01) scorePop = 0;
   }
+
+  if (punch > 0) {
+    punch -= punch * Math.min(1, dt * 10);
+    if (punch < 0.004) punch = 0;
+  }
 }
 
 /* ============================================================
@@ -1886,6 +1983,33 @@ function drawPlatforms(now) {
     const sx = p.x - camX;
     if (sx + p.w < -100 || sx > W + 100) continue;
 
+    if (p.sway) {
+      // 滑轨：一眼看出这根柱子会左右跑
+      const c0 = p.baseX - camX + p.w / 2;
+      const half = p.w / 2 + p.sway.amp + 6;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(150, 236, 255, 0.22)';
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(c0 - half, ty + 6);
+      ctx.lineTo(c0 + half, ty + 6);
+      ctx.stroke();
+      ctx.setLineDash([6, 8]);
+      ctx.strokeStyle = 'rgba(196, 246, 255, 0.85)';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(c0 - half, ty + 6);
+      ctx.lineTo(c0 + half, ty + 6);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (let s2 = -1; s2 <= 1; s2 += 2) {
+        ctx.fillStyle = 'rgba(196, 246, 255, 0.9)';
+        ctx.beginPath();
+        ctx.arc(c0 + s2 * half, ty + 6, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     const padX = PLAT_PAD;
     const sprite = getPlatformSprite(p);
 
@@ -1909,11 +2033,16 @@ function drawPlatforms(now) {
       ctx.restore();
     }
 
-    ctx.save();
-    ctx.translate(sx + p.w / 2, ty + d);
-    ctx.scale(scaleX, 1);
-    ctx.drawImage(sprite.c, -p.w / 2 - padX, -sprite.top, p.w + padX * 2, sprite.h);
-    ctx.restore();
+    if (scaleX === 1 && d === 0) {
+      // 没有形变就不必走 save/scale/restore，省掉每帧十几次变换
+      ctx.drawImage(sprite.c, sx - padX, ty - sprite.top, p.w + padX * 2, sprite.h);
+    } else {
+      ctx.save();
+      ctx.translate(sx + p.w / 2, ty + d);
+      ctx.scale(scaleX, 1);
+      ctx.drawImage(sprite.c, -p.w / 2 - padX, -sprite.top, p.w + padX * 2, sprite.h);
+      ctx.restore();
+    }
   }
 }
 
@@ -1982,11 +2111,13 @@ function drawTrajectory(now) {
   let rescuePlat = null;
   let rescueDist = Infinity;
 
+  const tLand = moveT + T;
   for (let i = 0; i < platforms.length; i++) {
     const p = platforms[i];
-    if (landWorldX >= p.x && landWorldX <= p.x + p.w) { hitPlat = p; break; }
-    const dl = Math.abs(landWorldX - p.x);
-    const dr = Math.abs(landWorldX - (p.x + p.w));
+    const px = platXAt(p, tLand);
+    if (landWorldX >= px && landWorldX <= px + p.w) { hitPlat = p; break; }
+    const dl = Math.abs(landWorldX - px);
+    const dr = Math.abs(landWorldX - (px + p.w));
     const d = Math.min(dl, dr);
     if (d < mercyRadius() && d < rescueDist) {
       rescueDist = d;
@@ -2071,6 +2202,16 @@ function drawPlayer(now) {
       ctx.ellipse(sx, ty + 3, 16 * sc, 5.5 * sc, 0, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  // 蓄力时脚下的能量环跟着张开
+  if (charging && player.state === 'idle') {
+    const ringR = 16 + charge * 30;
+    ctx.strokeStyle = 'rgba(255, 236, 150, ' + (0.16 + charge * 0.5).toFixed(3) + ')';
+    ctx.lineWidth = 1.6 + charge * 2.6;
+    ctx.beginPath();
+    ctx.ellipse(sx, ty + 3, ringR, ringR * 0.34, 0, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   ctx.save();
@@ -3026,6 +3167,14 @@ function render(now) {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
   ctx.save();
+  if (punch > 0.004) {
+    // 以角色为中心轻微推近，落地那一瞬间会「实」很多
+    const z = 1 + punch * 0.016;
+    const px = player.x - camX, py = player.y - 16;
+    ctx.translate(px, py);
+    ctx.scale(z, z);
+    ctx.translate(-px, -py);
+  }
   if (shake > 0.12) {
     ctx.translate((Math.random() * 2 - 1) * shake, (Math.random() * 2 - 1) * shake * 0.7);
   }
@@ -3048,6 +3197,7 @@ function render(now) {
   drawFx();
   drawLeaves();
   drawFireflies(now);
+  drawForeground();
 
   ctx.restore();
 
