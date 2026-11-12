@@ -57,3 +57,12 @@ app 里是 `file:///android_asset/…`，**没有 HTTP 服务器帮着补 index.
 `file:///android_asset/jump/`（以及不带后缀的 `…/jump`）补成 `…/jump/index.html`，
 外链（http/https）则交给系统浏览器打开。
 
+### 签名（关系到能不能直接覆盖安装）
+
+`android/keystore/gamebox.p12` 是固定签名用的密钥库，口令/别名都是 `gamebox`，
+证书指纹记在同目录的 `cert-sha256.txt`，`app/build.gradle` 里的 `signingConfigs.debug` 用它。
+
+它是**公开的调试用密钥**，只为让每次构建签名一致（否则每次 CI 都是新密钥，新包装不到旧包上）。
+不适合当正式发布密钥用；要换的话重新生成、重新填指纹，并且所有人得卸载一次才能装。
+
+

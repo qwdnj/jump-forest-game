@@ -10,8 +10,20 @@ android {
         applicationId 'com.dsh.gamebox'
         minSdk 24
         targetSdk 34
-        versionCode 2
-        versionName '1.0.1'
+        versionCode 3
+        versionName '1.0.2'
+    }
+
+    // 固定签名：密钥库由一次性的 Actions 任务生成，已提交在 android/keystore/。
+    // 不固定的话 Gradle 每次构建都新生成 debug 密钥，新包就装不到旧包上（签名不一致）。
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('keystore/gamebox.p12')
+            storeType 'PKCS12'
+            storePassword 'gamebox'
+            keyAlias 'gamebox'
+            keyPassword 'gamebox'
+        }
     }
 
     buildTypes {
