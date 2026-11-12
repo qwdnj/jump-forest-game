@@ -30,6 +30,9 @@ jobs:
           cp -r jump monkey android/app/src/main/assets/
           ls -la android/app/src/main/assets
 
+      - name: 自检 assets 里的链接
+        run: node tools/check-assets.js android/app/src/main/assets
+
       - name: 编译 debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace

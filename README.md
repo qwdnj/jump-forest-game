@@ -42,3 +42,18 @@
 
 下载 `app-debug.apk` 安装即可（debug 签名，安装时需要在手机系统设置里允许「安装未知来源应用」）。
 APK 里的网页和线上版本是同一份源码，改了网页重新构建就会同步。
+
+构建时会先跑 `node tools/check-assets.js`：检查 assets 里所有页面引用的本地链接都落在真实文件上。
+
+### 页面链接的写法（重要）
+
+app 里是 `file:///android_asset/…`，**没有 HTTP 服务器帮着补 index.html**，
+所以链接必须写全文件名：
+
+- ✅ `<a href="./jump/index.html">`
+- ❌ `<a href="./jump/">` —— 线上 GitHub Pages 能开，装进 APK 就是 `net::ERR_FILE_NOT_FOUND`
+
+外壳里也留了兜底：`MainActivity.shouldOverrideUrlLoading` 会把
+`file:///android_asset/jump/`（以及不带后缀的 `…/jump`）补成 `…/jump/index.html`，
+外链（http/https）则交给系统浏览器打开。
+
