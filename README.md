@@ -45,6 +45,23 @@ APK 里的网页和线上版本是同一份源码，改了网页重新构建就�
 
 构建时会先跑 `node tools/check-assets.js`：检查 assets 里所有页面引用的本地链接都落在真实文件上。
 
+### 这个壳都做了什么（v1.1.0）
+
+| | |
+| --- | --- |
+| 启动 | 原生启动页（渐变底 + 标题 + 进度条），`onPageFinished` 后 260ms 淡出，不再白屏 |
+| 返回 | 游戏里返回到选单；在选单要**连按两下**才退出，手滑不会把游戏关掉 |
+| 切后台 | `onPause` 交给 WebView，页面自己再 `visibilitychange` 暂停，回来是暂停面板 |
+| 崩溃 | 渲染进程被系统回收时 `onRenderProcessGone` 重建 WebView，不会连带整个 App 闪退 |
+| 误触 | 关掉长按选择/保存图片、双击缩放、下拉回弹 |
+| 出错 | `onReceivedError` 给一张能「重新加载」的错误页 |
+| 音量 | `setVolumeControlStream(STREAM_MUSIC)`，音量键调的是游戏音效 |
+| 安全 | 关闭 `setWebContentsDebuggingEnabled`、跨文件访问、混合内容、明文流量(cleartext) |
+| 体积 | R8 压缩 + 资源裁剪；图标改成 8bit 调色板 PNG（13.8 KB → 6.1 KB） |
+
+> 注意：assets 里的三份 HTML 已经不压缩了 —— zip 本身就会 deflate，
+> 再套一层 gzip 反而省不了多少，只多一层解压开销，所以没做。
+
 ### 页面链接的写法（重要）
 
 app 里是 `file:///android_asset/…`，**没有 HTTP 服务器帮着补 index.html**，

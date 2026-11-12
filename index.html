@@ -173,5 +173,20 @@
     <a class="apk" href="https://github.com/qwdnj/jump-forest-game/releases/latest">⬇ 下载 APK 安装包</a>
   </footer>
 </main>
+<script>
+/* 装进 APK 里跑的是 file:///android_asset/…，这时候：
+   1. 「下载 APK」按钮没意义 —— 已经装上了；
+   2. 回去靠的是手机返回键，不是浏览器返回键。
+   网页版（GitHub Pages）保持原样。 */
+(function () {
+  if (location.protocol !== 'file:') return;
+  var btn = document.querySelector('.apk');
+  if (btn) btn.style.display = 'none';
+  var foot = document.querySelector('footer');
+  if (foot) {
+    foot.innerHTML = '两个都是单文件网页游戏 · 分数和记录存在这台手机上<br>按手机返回键回到这里';
+  }
+})();
+</script>
 </body>
 </html>

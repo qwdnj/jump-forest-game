@@ -33,9 +33,23 @@ jobs:
       - name: 自检 assets 里的链接
         run: node tools/check-assets.js android/app/src/main/assets
 
+      - name: 冒烟测试页面脚本
+        run: |
+          node tools/smoke.js \
+            android/app/src/main/assets/index.html \
+            android/app/src/main/assets/jump/index.html \
+            android/app/src/main/assets/monkey/index.html
+
       - name: 编译 debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: 看看包有多大
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          ls -l "$APK"
+          echo "APK 大小：$(wc -c < "$APK") 字节"
+          unzip -l "$APK"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -50,6 +64,9 @@ jobs:
           name: 小游戏合集 APK
           body: |
             自动构建的安装包，内含《跳一跳 · 森林》和《海滩猴子大冒险》。
+
+            v1.1.0：原生启动页、返回键防手滑、渲染进程崩溃自动恢复、
+            长按防误触、错误重试页；R8 压缩 + 图标瘦身，包体更小。
             安装时需要在手机上允许「安装未知来源应用」。
           files: android/app/build/outputs/apk/debug/app-debug.apk
           fail_on_unmatched_files: true

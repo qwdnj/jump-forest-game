@@ -10,8 +10,8 @@ android {
         applicationId 'com.dsh.gamebox'
         minSdk 24
         targetSdk 34
-        versionCode 3
-        versionName '1.0.2'
+        versionCode 4
+        versionName '1.1.0'
     }
 
     // 固定签名：密钥库由一次性的 Actions 任务生成，已提交在 android/keystore/。
@@ -27,8 +27,17 @@ android {
     }
 
     buildTypes {
+        // 体积优化：debug 包也交给 R8 压缩代码、裁掉没用的资源。
+        // 名字还是 app-debug.apk，CI 和 Release 那边都不用改。
+        debug {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
