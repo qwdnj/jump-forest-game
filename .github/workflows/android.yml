@@ -40,6 +40,9 @@ jobs:
             android/app/src/main/assets/jump/index.html \
             android/app/src/main/assets/monkey/index.html
 
+      - name: 难度 / 皮肤回归测试
+        run: node tools/mode-test.js android/app/src/main/assets/jump/index.html
+
       - name: 编译 debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
@@ -64,6 +67,12 @@ jobs:
           name: 小游戏合集 APK
           body: |
             自动构建的安装包，内含《跳一跳 · 森林》和《海滩猴子大冒险》。
+
+            v1.2.0：跳一跳加入**简单 / 困难**两种难度 —— 困难模式取消抛物线，
+            改成贴柱顶等高直线冲刺（无落点预览、平台更窄、落地额外 +1 分），
+            两种模式最高分分开记；新增**皮肤系统**，六款皮肤按最高分解锁
+            （森林橘 / 薄荷青 / 小蜜蜂 / 小雪人 / 夜行者 / 黄金甲），
+            暂停面板和结算页都多了「设置」入口。
 
             v1.1.1：选单页可以正常滚动了（以前两张卡片被 flex 压扁，
             「开始玩」被裁在屏幕外）；跳一跳的「全屏」按钮在 APK 里真正切横屏

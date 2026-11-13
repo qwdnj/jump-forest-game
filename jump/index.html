@@ -96,14 +96,10 @@ const CFG = {
   maxChargeMs: 900,
   minDist: 60,
   maxDist: 430,
-  perfectR: 0.12,       // 完美半径 = 平台宽 × 比例（夹在 6.5~11px，窄平台不至于过苛）
-  mercyPx: 7,
   hitstopMs: 55,
   step: 1 / 120,
   trailDots: 14,
   trailLife: 0.32,
-  springChance: 0.16,
-  swayChance: 0.17,      // 会左右摆动的柱子出现概率
   springBonus: 3,
   poolMax: 300,
   fireflyBase: 16,
@@ -115,6 +111,98 @@ const CFG = {
   leafCount: 15,
   starCount: 46
 };
+
+/* 提示：原先写在 CFG 里的 mercyPx / perfectR / springChance / swayChance
+   已经挪进下面的 MODES —— 它们是按难度分开的，不能再只留一份。 */
+
+/* ============================================================
+ *  2b. 难度模式
+ *  简单：老一套，抛物线跳跃 + 落点预览，平台宽、有救援余量。
+ *  困难：取消抛物线 —— 起跳后贴着柱子顶面直线冲刺，冲到点就落，
+ *        冲进缝里就掉；平台更窄、间距更大、没有落点预览、额外 +1 分。
+ *  判定逻辑两套模式共用（resolveLanding），只是「什么时候落」不一样。
+ * ============================================================ */
+const MODES = {
+  easy: {
+    id: 'easy', name: '简单', sub: '抛物线跳跃', color: '#7ee9a8',
+    arc: true,          // true = 抛物线，false = 直线冲刺
+    preview: true,      // 蓄力时是否画完整落点预览
+    bonus: 0,           // 每次落地额外加分
+    mercyPx: 7,         // 边缘救援半径
+    perfectR: 0.12,     // 完美判定半径 = 平台宽 × 比例
+    widthMul: 1, gapMul: 1,
+    springChance: 0.16, swayChance: 0.17
+  },
+  hard: {
+    id: 'hard', name: '困难', sub: '直线冲刺', color: '#ffb060',
+    arc: false,
+    preview: false,
+    bonus: 1,
+    mercyPx: 1.5,
+    perfectR: 0.09,
+    widthMul: 0.84, gapMul: 1.14,
+    springChance: 0.10, swayChance: 0.30
+  }
+};
+const MODE_LIST = ['easy', 'hard'];
+function MODE() { return MODES[modeKey] || MODES.easy; }
+
+/* ============================================================
+ *  2c. 皮肤
+ *  每个皮肤只描述外观，绘制逻辑在 buildPlayerSprite / drawPlayer 里参数化。
+ *  unlock = 历史最高分解锁（两种模式的最高分取大）。
+ * ============================================================ */
+const SKINS = [
+  {
+    id: 'orange', name: '森林橘', unlock: 0,
+    body: ['#ff9a72', '#ef5f3c'], belly: 'rgba(255,255,255,0.28)',
+    band: ['#e8543f', '#ffb3a3'], cheek: 'rgba(255,130,110,0.42)',
+    ear: ['#ff9a72', '#ffc9b2'], ears: 'round', pattern: 'belt',
+    eye: '#2b2320', trail: '#ffb08c', glow: null
+  },
+  {
+    id: 'mint', name: '薄荷青', unlock: 0,
+    body: ['#8ef0c8', '#2fa87e'], belly: 'rgba(255,255,255,0.34)',
+    band: ['#2a8f74', '#9ff5d4'], cheek: 'rgba(80,220,180,0.32)',
+    ear: ['#8ef0c8', '#dcfff2'], ears: 'leaf', pattern: 'belt',
+    eye: '#10382f', trail: '#9ff5d4', glow: null
+  },
+  {
+    id: 'bee', name: '小蜜蜂', unlock: 15,
+    body: ['#ffe066', '#f0b400'], belly: 'rgba(255,255,255,0.20)',
+    band: ['#33302a', '#57503f'], cheek: 'rgba(255,170,60,0.34)',
+    ear: ['#ffe066', '#fff6bd'], ears: 'antenna', pattern: 'stripe',
+    eye: '#2b2320', trail: '#ffe066', glow: 'rgba(255,225,90,0.18)'
+  },
+  {
+    id: 'snow', name: '小雪人', unlock: 30,
+    body: ['#ffffff', '#c6dff2'], belly: 'rgba(150,200,235,0.30)',
+    band: ['#7fbde6', '#e8f6ff'], cheek: 'rgba(255,150,170,0.28)',
+    ear: ['#ffffff', '#eef8ff'], ears: 'round', pattern: 'belt',
+    eye: '#1e3b4a', trail: '#dbeeff', glow: 'rgba(190,230,255,0.20)'
+  },
+  {
+    id: 'ninja', name: '夜行者', unlock: 50,
+    body: ['#5f6779', '#282d3b'], belly: 'rgba(255,255,255,0.13)',
+    band: ['#d94f4f', '#ff9a9a'], cheek: 'rgba(190,100,100,0.22)',
+    ear: ['#4a5163', '#6f7889'], ears: 'round', pattern: 'belt',
+    eye: '#ffd54f', trail: '#9fb4d8', glow: 'rgba(120,150,200,0.16)'
+  },
+  {
+    id: 'gold', name: '黄金甲', unlock: 80,
+    body: ['#ffe28a', '#d99a16'], belly: 'rgba(255,255,255,0.32)',
+    band: ['#a96b0b', '#fff2b8'], cheek: 'rgba(255,180,60,0.34)',
+    ear: ['#ffe28a', '#fff6c8'], ears: 'round', pattern: 'belt',
+    eye: '#4a2c05', trail: '#ffe9a8', glow: 'rgba(255,210,80,0.24)'
+  }
+];
+const SKIN_TAU = Math.PI * 2;
+function skinById(id) {
+  for (let i = 0; i < SKINS.length; i++) if (SKINS[i].id === id) return SKINS[i];
+  return null;
+}
+function SKIN() { return skinById(skinId) || SKINS[0]; }
+function skinUnlocked(sk) { return !!sk && overallBest() >= (sk.unlock || 0); }
 
 /* ============================================================
  *  在线排行榜配置
@@ -562,7 +650,11 @@ function buildStars() {
   return arr;
 }
 
+/* 角色精灵：按当前皮肤烘焙一张小画布。
+   皮肤只换配色和头上的零件（圆耳朵 / 触角 / 叶子），身体轮廓保持不变，
+   这样跳跃、挤压、旋转的手感对所有皮肤都一样。 */
 function buildPlayerSprite() {
+  const s = SKIN();
   const d = Math.min(DPR, 2);
   const minX = -20, maxX = 20, minY = -52, maxY = 4;
   const w = maxX - minX, h = maxY - minY;
@@ -573,39 +665,94 @@ function buildPlayerSprite() {
   g.scale(d, d);
   g.translate(-minX, -minY);
 
-  g.fillStyle = '#ff9a72';
-  g.beginPath();
-  g.arc(-8.58, -35, 5.6, 0, Math.PI * 2);
-  g.arc(8.58, -35, 5.6, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = '#ffc9b2';
-  g.beginPath();
-  g.arc(-8.58, -35.5, 2.8, 0, Math.PI * 2);
-  g.arc(8.58, -35.5, 2.8, 0, Math.PI * 2);
-  g.fill();
+  /* ---- 头顶的零件 ---- */
+  if (s.ears === 'antenna') {
+    // 触角：两根细杆 + 两个小球
+    g.strokeStyle = s.band[0];
+    g.lineWidth = 2.2;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(-6, -32); g.lineTo(-9.5, -44.5);
+    g.moveTo(6, -32); g.lineTo(9.5, -44.5);
+    g.stroke();
+    g.fillStyle = s.ear[1];
+    g.beginPath();
+    g.arc(-9.5, -45.6, 3.1, 0, SKIN_TAU);
+    g.arc(9.5, -45.6, 3.1, 0, SKIN_TAU);
+    g.fill();
+  } else if (s.ears === 'leaf') {
+    // 一片小叶子歪在左上角
+    g.fillStyle = s.band[0];
+    g.beginPath();
+    g.moveTo(-7, -33);
+    g.quadraticCurveTo(-16, -40, -8.5, -46.5);
+    g.quadraticCurveTo(-2.5, -40, -7, -33);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.30)';
+    g.beginPath();
+    g.moveTo(-7, -34.5);
+    g.quadraticCurveTo(-11, -39, -8, -43.5);
+    g.quadraticCurveTo(-6, -39, -7, -34.5);
+    g.fill();
+    g.fillStyle = s.ear[1];
+    g.beginPath();
+    g.arc(8.58, -35, 4.6, 0, SKIN_TAU);
+    g.fill();
+  } else {
+    // 圆耳朵（默认）
+    g.fillStyle = s.ear[0];
+    g.beginPath();
+    g.arc(-8.58, -35, 5.6, 0, SKIN_TAU);
+    g.arc(8.58, -35, 5.6, 0, SKIN_TAU);
+    g.fill();
+    g.fillStyle = s.ear[1];
+    g.beginPath();
+    g.arc(-8.58, -35.5, 2.8, 0, SKIN_TAU);
+    g.arc(8.58, -35.5, 2.8, 0, SKIN_TAU);
+    g.fill();
+  }
 
+  /* ---- 身体 ---- */
   const bg = g.createLinearGradient(-13, -34, 13, 0);
-  bg.addColorStop(0, '#ff9a72');
-  bg.addColorStop(1, '#ef5f3c');
+  bg.addColorStop(0, s.body[0]);
+  bg.addColorStop(1, s.body[1]);
   g.fillStyle = bg;
   rr(g, -13, -34, 26, 34, 9);
   g.fill();
 
-  g.fillStyle = 'rgba(255,255,255,0.28)';
+  /* ---- 肚子上的亮块 ---- */
+  g.fillStyle = s.belly;
   rr(g, -9.5, -30.5, 19, 10.88, 6);
   g.fill();
 
-  g.fillStyle = '#e8543f';
-  rr(g, -14, -13.6, 28, 6.5, 3.5);
-  g.fill();
-  g.fillStyle = '#ffb3a3';
-  rr(g, -14, -13.6, 28, 2, 2);
-  g.fill();
+  if (s.pattern === 'stripe') {
+    // 小蜜蜂的条纹：裁在身体里画，不会溢出轮廓
+    g.save();
+    g.beginPath();
+    rr(g, -13, -34, 26, 34, 9);
+    g.clip();
+    g.fillStyle = s.band[0];
+    g.fillRect(-13, -19, 26, 5);
+    g.fillRect(-13, -8, 26, 5);
+    g.fillStyle = 'rgba(255,255,255,0.16)';
+    g.fillRect(-13, -20.4, 26, 1.4);
+    g.fillRect(-13, -9.4, 26, 1.4);
+    g.restore();
+  } else {
+    /* ---- 腰带 ---- */
+    g.fillStyle = s.band[0];
+    rr(g, -14, -13.6, 28, 6.5, 3.5);
+    g.fill();
+    g.fillStyle = s.band[1];
+    rr(g, -14, -13.6, 28, 2, 2);
+    g.fill();
+  }
 
-  g.fillStyle = 'rgba(255,130,110,0.42)';
+  /* ---- 腮红 ---- */
+  g.fillStyle = s.cheek;
   g.beginPath();
-  g.ellipse(-8.5, -14.96, 3.4, 2.2, 0, 0, Math.PI * 2);
-  g.ellipse(8.5, -14.96, 3.4, 2.2, 0, 0, Math.PI * 2);
+  g.ellipse(-8.5, -14.96, 3.4, 2.2, 0, 0, SKIN_TAU);
+  g.ellipse(8.5, -14.96, 3.4, 2.2, 0, 0, SKIN_TAU);
   g.fill();
 
   return { c: c, minX: minX, minY: minY, w: w, h: h };
@@ -716,6 +863,14 @@ let platforms = [];
 let player = null;
 let camX = 0;
 let score = 0, best = 0, combo = 0;
+/* ---- 难度 / 皮肤 / 最高分（按模式分开记） ---- */
+let bestEasy = 0, bestHard = 0;
+let modeKey = 'easy';
+let skinId = 'orange';
+let settingsOpen = false;
+let settingsMsg = '', settingsMsgAt = 0;
+function bestOfMode(m) { return m === 'hard' ? bestHard : bestEasy; }
+function overallBest() { return Math.max(bestEasy, bestHard); }
 let runBest = 0;                  // 本局开始时的历史最高分
 
 /* ---- 排行榜（本机 top10） ---- */
@@ -751,7 +906,8 @@ function saveBoard() {
 /* 把一局的成绩塞进榜里，返回名次（没进前 10 返回 0） */
 function addRunToBoard(sc) {
   if (!(sc > 0)) return 0;
-  const entry = { s: sc, t: Date.now(), n: playerName };
+  // m = 模式标记，榜单里会标出这一局是简单还是困难
+  const entry = { s: sc, t: Date.now(), n: playerName, m: modeKey };
   onlineSubmit();
   board.push(entry);
   board.sort(function (a, b) { return b.s - a.s || a.t - b.t; });
@@ -797,7 +953,7 @@ function onlineSubmit() {
     fetch(ONLINE.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: playerName, score: score, at: Date.now() }),
+      body: JSON.stringify({ name: playerName, score: score, at: Date.now(), mode: modeKey }),
       signal: t.signal
     }).then(function () { t.clear(); }, function () { t.clear(); });
   } catch (e) {}
@@ -954,8 +1110,69 @@ let sparkTimer = 0;
 let particles = [], popups = [], rings = [], leaves = [], trail = [], fireflies = [];
 const trailPool = [];
 
-try { best = parseInt(localStorage.getItem('jf_best') || '0', 10) || 0; } catch (e) { best = 0; }
-function saveBest() { try { localStorage.setItem('jf_best', String(best)); } catch (e) {} }
+/* ---- 读档：模式 / 各模式最高分 / 皮肤 ---- */
+try {
+  const m = localStorage.getItem('jf_mode');
+  if (m && MODES[m]) modeKey = m;
+} catch (e) {}
+try {
+  // 老版本只有一个 jf_best，算作「简单」的历史最高分，不让老玩家丢记录
+  bestEasy = parseInt(localStorage.getItem('jf_best_easy') || localStorage.getItem('jf_best') || '0', 10) || 0;
+  bestHard = parseInt(localStorage.getItem('jf_best_hard') || '0', 10) || 0;
+} catch (e) { bestEasy = 0; bestHard = 0; }
+best = bestOfMode(modeKey);
+try {
+  const sk = skinById(localStorage.getItem('jf_skin'));
+  if (sk && skinUnlocked(sk)) skinId = sk.id;
+} catch (e) {}
+if (!skinById(skinId)) skinId = SKINS[0].id;
+
+function saveBest() {
+  if (modeKey === 'hard') { if (best > bestHard) bestHard = best; }
+  else if (best > bestEasy) bestEasy = best;
+  try {
+    localStorage.setItem('jf_best_easy', String(bestEasy));
+    localStorage.setItem('jf_best_hard', String(bestHard));
+    localStorage.setItem('jf_best', String(overallBest()));   // 兼容更老的版本
+  } catch (e) {}
+}
+
+/* 切换难度：换最高分 + 直接重开一局（难度是整套物理，不能中途换） */
+function applyMode(key) {
+  if (!MODES[key]) return;
+  modeKey = key;
+  try { localStorage.setItem('jf_mode', modeKey); } catch (e) {}
+  best = bestOfMode(modeKey);
+  settingsOpen = false;
+  reset();
+  const M = MODE();
+  spawnPopup(camX + W / 2, topY() - 150,
+    M.name + '模式 · ' + (M.arc ? '抛物线' : '取消抛物线'), M.color, 18);
+  spawnPopup(camX + W / 2, topY() - 118,
+    M.arc ? '有落点预览，平台更宽' : '直线冲刺，没有落点预览', 'rgba(255,255,255,0.92)', 13.5);
+  vibrate(12);
+  beep(M.arc ? 660 : 320, 0.10, 'sine', 0.11);
+  beep(M.arc ? 880 : 220, 0.12, 'sine', 0.09, null, 0.09);
+}
+
+/* 换皮肤：只在设置面板里调用，没解锁的给出提示 */
+function applySkin(sk) {
+  if (!sk || skinId === sk.id) return;
+  if (!skinUnlocked(sk)) {
+    settingsMsg = '还差 ' + Math.max(1, sk.unlock - overallBest()) + ' 分解锁';
+    settingsMsgAt = performance.now();
+    beep(200, 0.10, 'triangle', 0.10, 120);
+    return;
+  }
+  skinId = sk.id;
+  try { localStorage.setItem('jf_skin', skinId); } catch (e) {}
+  playerSprite = buildPlayerSprite();
+  settingsMsg = '已换上 ' + sk.name;
+  settingsMsgAt = performance.now();
+  beep(880, 0.07, 'sine', 0.10);
+  beep(1180, 0.09, 'sine', 0.07, null, 0.06);
+  vibrate(8);
+}
 
 /* ============================================================
  *  10. 平台
@@ -974,7 +1191,7 @@ function deepProg() {
 /* 边缘救援半径：难度越高越不肯帮忙。
    判定和落点预览必须用同一个值，否则预览会骗人。 */
 function mercyRadius() {
-  return CFG.mercyPx - deepProg() * 2.5;
+  return Math.max(0, MODE().mercyPx - deepProg() * 2.5);
 }
 
 /* 柱子在世界时间 t 的横坐标（静止柱子就是它自己） */
@@ -985,6 +1202,7 @@ function platXAt(p, t) {
 function makePlatform(last) {
   const prog = Math.min(score / 30, 1);
   const deep = deepProg();
+  const M = MODE();
 
   // 连续失误时给一点手感补偿，别让人卡死在同一个距离上
   let help = 0;
@@ -992,13 +1210,14 @@ function makePlatform(last) {
 
   const wMin = Math.max(38, 58 - prog * 14 - deep * 7) * (1 + help);
   const wMax = Math.max(52, 112 - prog * 44 - deep * 14) * (1 + help);
-  const w = rand(wMin, wMax);
+  // 困难模式整体收窄、间距拉长；救援半径也几乎为零，容错全压在手感上
+  const w = Math.max(26, rand(wMin, wMax) * M.widthMul);
   const gMin = (58 + prog * 12 + deep * 16) * (1 - help);
   const gMax = Math.min(214, 148 + prog * 55 + deep * 14) * (1 - help);
-  const gap = rand(gMin, gMax);
-  const isSpring = score >= 3 && Math.random() < CFG.springChance;
+  const gap = Math.min(268, rand(gMin, gMax) * M.gapMul);
+  const isSpring = score >= 3 && Math.random() < M.springChance;
   // 会左右摆动的柱子：落点预览会按「落地那一刻」的位置算，所以不会骗人
-  const sway = (!isSpring && score >= 22 && Math.random() < CFG.swayChance)
+  const sway = (!isSpring && score >= 22 && Math.random() < M.swayChance)
     ? {
         amp: 8 + prog * 8 + deep * 4,
         spd: 0.55 + Math.random() * 0.5,
@@ -1217,6 +1436,7 @@ function reset() {
     y: topY(),
     vx: 0, vy: 0,
     squash: 1, rot: 0, rotSpeed: 0,
+    glideLeft: 0,                // 直线冲刺剩余时间（困难模式用）
     state: 'idle',
     plat: platforms[0]
   };
@@ -1241,6 +1461,7 @@ function reset() {
   wantCharge = false; chargeBufferAt = 0;
   jumpCount = 0;
   boardOpen = false;
+  settingsOpen = false;
   lastRank = 0;
   particles = []; popups = []; rings = []; trail = [];
   gameState = 'playing';
@@ -1299,20 +1520,36 @@ function releaseCharge() {
 
   const t = elapsed / CFG.maxChargeMs;
   const dist = CFG.minDist + t * (CFG.maxDist - CFG.minDist);
-  const vy0 = -(560 + dist * 0.75);
-  const T = (2 * Math.abs(vy0)) / CFG.gravity;
+  const M = MODE();
 
-  player.vx = dist / T;
-  player.vy = vy0;
   player.rot = 0;
-  player.rotSpeed = (Math.PI * 2) / T;
-  player.state = 'jump';
   player.plat = null;
+  player.glideLeft = 0;
+
+  if (M.arc) {
+    /* 简单：抛物线。竖直初速定飞行时间，水平速度 = 距离 / 飞行时间 */
+    const vy0 = -(560 + dist * 0.75);
+    const T = (2 * Math.abs(vy0)) / CFG.gravity;
+    player.vx = dist / T;
+    player.vy = vy0;
+    player.rotSpeed = (Math.PI * 2) / T;
+    player.state = 'jump';
+  } else {
+    /* 困难：取消抛物线。全程等高、匀速直线冲刺，冲到点再垂直落下 */
+    const T = clamp(0.30 + dist / 1200, 0.34, 0.56);
+    player.vx = dist / T;
+    player.vy = 0;
+    player.rotSpeed = 0;
+    player.glideLeft = T;
+    player.dashFromX = player.x;      // 冲刺起点，画那条直线用
+    player.state = 'glide';
+  }
   jumpCount++;
 
   spawnDust(player.x, topY(), 5, 0.7);
   vibrate(8);
-  beep(520, 0.13, 'triangle', 0.10, 760);
+  if (M.arc) beep(520, 0.13, 'triangle', 0.10, 760);
+  else { beep(300, 0.10, 'sawtooth', 0.09, 900); beep(760, 0.08, 'square', 0.06, 1020, 0.05); }
 }
 
 function onDown(e) {
@@ -1323,11 +1560,12 @@ function onDown(e) {
 
   if (nameEditing) { closeNameEditor(true); return; }
 
-  // 面板上的按钮（结算/暂停/排行榜）优先
+  // 面板上的按钮（结算/暂停/排行榜/设置）优先
   const hit = hitTest(x, y);
   if (hit) { hit(); return; }
 
-  if (boardOpen) { boardOpen = false; return; }   // 点空白处关闭排行榜
+  if (settingsOpen) { settingsOpen = false; return; }   // 点空白处关掉设置
+  if (boardOpen) { boardOpen = false; return; }         // 点空白处关闭排行榜
 
   const mb = getMuteBtn();
   if (hitCircle(x, y, mb.x, mb.y, mb.r)) {
@@ -1351,7 +1589,7 @@ function onDown(e) {
 
   if (gameState === 'over') { restartGame(); return; }
   // 空中按下先记下来，落地立刻接上蓄力（跟手很多）
-  if (!startCharge() && player.state === 'jump') {
+  if (!startCharge() && (player.state === 'jump' || player.state === 'glide')) {
     wantCharge = true;
     chargeBufferAt = performance.now();
   }
@@ -1376,14 +1614,19 @@ window.addEventListener('keydown', function (e) {
     ensureAudio();
     if (gameState === 'paused') { togglePause(); return; }
     if (gameState === 'over') { restartGame(); return; }
-    if (!startCharge() && player.state === 'jump') {
+    if (!startCharge() && (player.state === 'jump' || player.state === 'glide')) {
       wantCharge = true;
       chargeBufferAt = performance.now();
     }
   } else if (e.code === 'KeyP' || e.code === 'Escape') {
     e.preventDefault();
+    if (settingsOpen) { settingsOpen = false; return; }
     if (boardOpen) { boardOpen = false; return; }
     if (gameState === 'playing' || gameState === 'paused') togglePause();
+  } else if (e.code === 'KeyM') {
+    /* 桌面端调试方便：M 直接切难度（手机上是暂停面板里的「设置」） */
+    e.preventDefault();
+    applyMode(modeKey === 'easy' ? 'hard' : 'easy');
   } else if (e.code === 'KeyF') {
     e.preventDefault();
     toggleFullscreen();
@@ -1408,6 +1651,7 @@ window.addEventListener('blur', function () {
 function restartGame() {
   if (performance.now() - overAt < 420) return;
   boardOpen = false;
+  settingsOpen = false;
   reset();
   beep(520, 0.08, 'sine', 0.10);
   beep(780, 0.12, 'sine', 0.09, null, 0.09);
@@ -1416,6 +1660,7 @@ function restartGame() {
 function togglePause() {
   if (gameState === 'over') return;
   boardOpen = false;
+  settingsOpen = false;
 
   if (gameState === 'playing') {
     if (charging) { charging = false; charge = 0; stopChargeSound(); }
@@ -1512,9 +1757,10 @@ function checkMilestone(ty) {
   }
 }
 
-/* 完美判定半径：宽平台给多一点，窄平台不至于过苛 */
+/* 完美判定半径：宽平台给多一点，窄平台不至于过苛；困难模式更严 */
 function perfectRadius(p) {
-  return clamp(p.w * CFG.perfectR, 6.5, 11);
+  const M = MODE();
+  return clamp(p.w * M.perfectR, M.arc ? 6.5 : 5.5, M.arc ? 11 : 9.5);
 }
 
 function doLand(p, ty, rescued) {
@@ -1536,22 +1782,23 @@ function doLand(p, ty, rescued) {
     p.squash = 0.6;
 
     const wasBest = best;
+    const EXTRA = MODE().bonus;      // 困难模式每次落地额外 +1
 
     if (rescued) {
       if (combo >= 2) spawnPopup(player.x, ty - 80, '连击中断', '#ff9b7a', 15);
       combo = 0;
       recentMisses++;
-      score += 1;
+      score += 1 + EXTRA;
       rescueCount++;
       spawnDust(player.x, ty, 5, 0.8);
-      spawnPopup(player.x, ty - 82, '惊险 +1', '#ffd54f', 18);
+      spawnPopup(player.x, ty - 82, '惊险 +' + (1 + EXTRA), '#ffd54f', 18);
       shake = Math.min(shake + 2.5, 6);
       vibrate(12);
       beep(240, 0.12, 'triangle', 0.12, 140);
       hitstop = CFG.hitstopMs / 2000;
       punch = Math.max(punch, 0.4);
     } else if (p.spring) {
-      const gain = CFG.springBonus + (perfect ? 1 : 0);
+      const gain = CFG.springBonus + (perfect ? 1 : 0) + EXTRA;
       score += gain;
       if (perfect) {
         combo++;
@@ -1576,7 +1823,7 @@ function doLand(p, ty, rescued) {
       maxCombo = Math.max(maxCombo, combo);
       recentMisses = Math.max(0, recentMisses - 1);
       const bonus = combo >= 2 ? Math.min(combo - 1, 5) : 0;
-      const gain = 2 + bonus;
+      const gain = 2 + bonus + EXTRA;
       score += gain;
       eyeGlow = 1;
       punch = Math.max(punch, 0.85);
@@ -1593,7 +1840,7 @@ function doLand(p, ty, rescued) {
       if (combo >= 2) spawnPopup(player.x, ty - 80, '连击中断', '#ff9b7a', 15);
       combo = 0;
       recentMisses++;
-      score += 1;
+      score += 1 + EXTRA;
       spawnDust(player.x, ty, 7, 1);
       shake = Math.min(shake + 3.4, 7);
       vibrate(10);
@@ -1648,6 +1895,43 @@ function gameOver() {
 /* ============================================================
  *  16. 固定步长物理
  * ============================================================ */
+/* 落地判定（两种模式共用）：当前横坐标压在哪个柱子上，含边缘救援。
+   抛物线在越过柱顶那一刻调用，直线冲刺在冲刺结束那一刻调用。 */
+function resolveLanding(ty, fromGlide) {
+  let hit = null;
+  let rescue = null;
+  let rescueDist = Infinity;
+  const MERCY = mercyRadius();
+
+  for (let i = 0; i < platforms.length; i++) {
+    const p = platforms[i];
+    if (player.x >= p.x && player.x <= p.x + p.w) { hit = p; break; }
+    const dl = Math.abs(player.x - p.x);
+    const dr = Math.abs(player.x - (p.x + p.w));
+    const d = Math.min(dl, dr);
+    if (d < MERCY && d < rescueDist) {
+      rescueDist = d;
+      rescue = p;
+    }
+  }
+
+  if (hit) {
+    doLand(hit, ty, false);
+    return;
+  }
+  if (rescue) {
+    player.x = clamp(player.x, rescue.x + 4, rescue.x + rescue.w - 4);
+    doLand(rescue, ty, true);
+    return;
+  }
+
+  // 掉进缝里：从当前位置开始自由落体（直线冲刺时竖直速度是 0，直接往下掉）
+  player.state = 'fall';
+  if (fromGlide) player.vy = 0;
+  player.rotSpeed = Math.PI * 2 * 0.9;
+  player.vx *= 0.82;
+}
+
 function fixedUpdate(dt) {
   const ty = topY();
 
@@ -1662,7 +1946,17 @@ function fixedUpdate(dt) {
     if (player.state === 'idle' && player.plat === p) player.x += p.x - before;
   }
 
-  if (player.state === 'jump' || player.state === 'fall') {
+  if (player.state === 'glide') {
+    /* 困难模式：直线冲刺。y 始终等于柱顶，只有 x 在变；
+       冲刺时间一到就做落地判定 —— 落在柱子上就站住，落在缝里就直接往下掉。
+       整条轨迹是一条水平线，没有抛物线，也没有竖直初速。 */
+    player.x += player.vx * dt;
+    player.glideLeft -= dt;
+    if (player.glideLeft <= 0) {
+      player.glideLeft = 0;
+      resolveLanding(ty, true);
+    }
+  } else if (player.state === 'jump' || player.state === 'fall') {
     const prevY = player.y;
 
     player.vy += CFG.gravity * dt;
@@ -1671,33 +1965,7 @@ function fixedUpdate(dt) {
     player.rot += player.rotSpeed * dt;
 
     if (player.state === 'jump' && player.vy > 0 && prevY <= ty && player.y >= ty) {
-      let hit = null;
-      let rescue = null;
-      let rescueDist = Infinity;
-      const MERCY = mercyRadius();
-
-      for (let i = 0; i < platforms.length; i++) {
-        const p = platforms[i];
-        if (player.x >= p.x && player.x <= p.x + p.w) { hit = p; break; }
-        const dl = Math.abs(player.x - p.x);
-        const dr = Math.abs(player.x - (p.x + p.w));
-        const d = Math.min(dl, dr);
-        if (d < MERCY && d < rescueDist) {
-          rescueDist = d;
-          rescue = p;
-        }
-      }
-
-      if (hit) {
-        doLand(hit, ty, false);
-      } else if (rescue) {
-        player.x = clamp(player.x, rescue.x + 4, rescue.x + rescue.w - 4);
-        doLand(rescue, ty, true);
-      } else {
-        player.state = 'fall';
-        player.rotSpeed = Math.PI * 2 * 0.9;
-        player.vx *= 0.82;
-      }
+      resolveLanding(ty, false);
     }
 
     if (player.state === 'fall' && player.y > H + 60) gameOver();
@@ -1786,11 +2054,12 @@ function visualUpdate(dt, now) {
   }
 
   // 跳跃残影（复用对象，不产生垃圾）
-  if (player.state === 'jump' || player.state === 'fall') {
+  if (player.state === 'jump' || player.state === 'fall' || player.state === 'glide') {
     const t = trail.length >= CFG.trailDots
       ? trail.shift()
       : (trailPool.pop() || { x: 0, y: 0, life: 0, maxLife: 1 });
-    t.x = player.x; t.y = player.y;
+    t.x = player.x;
+    t.y = player.y - (player.state === 'glide' ? 15 : 0);
     t.life = CFG.trailLife; t.maxLife = CFG.trailLife;
     trail.push(t);
   } else if (trail.length) {
@@ -2064,16 +2333,60 @@ function drawPlatforms(now) {
 
 function drawTrail() {
   if (!trail.length) return;
+  const trailColor = SKIN().trail || '#ffb08c';
+  const glide = player.state === 'glide';       // 直线冲刺：残影拉成横向的速度线
   for (let i = 0; i < trail.length; i++) {
     const t = trail[i];
-    const a = (t.life / t.maxLife) * 0.34;
+    const k2 = t.life / t.maxLife;
+    const a = k2 * (glide ? 0.55 : 0.34);
     if (a <= 0.01) continue;
     ctx.globalAlpha = a;
-    ctx.fillStyle = '#ffb08c';
+    ctx.fillStyle = trailColor;
     ctx.beginPath();
-    ctx.arc(t.x - camX, t.y - 17, 9 * (t.life / t.maxLife) + 2, 0, Math.PI * 2);
+    if (glide) {
+      ctx.ellipse(t.x - camX, t.y - 17, 17 * k2 + 6, 3.2 * k2 + 1.2, 0, 0, SKIN_TAU);
+    } else {
+      ctx.arc(t.x - camX, t.y - 17, 9 * k2 + 2, 0, Math.PI * 2);
+    }
     ctx.fill();
   }
+  ctx.globalAlpha = 1;
+}
+
+/* 困难模式蓄力时的引导：一条水平直线，只画前面一小段。
+   它告诉你「往哪个方向飞」，但故意不画到终点 —— 落点全靠手感。 */
+function drawStraightGuide(dist, ty, now) {
+  const startX = player.x - camX;
+  const y = ty - 15;
+  const len = Math.min(dist, 132);
+  const segs = 9;
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (let i = 0; i < segs; i++) {
+    const a0 = i / segs;
+    const x0 = startX + len * a0;
+    const x1 = startX + len * ((i + 1) / segs) - 5;
+    if (x1 <= x0) continue;
+    ctx.globalAlpha = 0.85 * (1 - a0 * 0.92);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3.4 * (1 - a0 * 0.45);
+    ctx.beginPath();
+    ctx.moveTo(x0, y);
+    ctx.lineTo(x1, y);
+    ctx.stroke();
+  }
+  // 箭头，强调「直线」这件事
+  const pulse = 0.75 + Math.sin(now / 170) * 0.25;
+  ctx.globalAlpha = 0.8 * pulse;
+  ctx.fillStyle = '#ffb060';
+  const ax = startX + len + 6;
+  ctx.beginPath();
+  ctx.moveTo(ax, y);
+  ctx.lineTo(ax - 11, y - 6.5);
+  ctx.lineTo(ax - 11, y + 6.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
   ctx.globalAlpha = 1;
 }
 
@@ -2082,6 +2395,13 @@ function drawTrajectory(now) {
 
   const ty = topY();
   const dist = CFG.minDist + charge * (CFG.maxDist - CFG.minDist);
+
+  // 困难模式没有抛物线，也就不给抛物线预览
+  if (!MODE().arc) {
+    drawStraightGuide(dist, ty, now);
+    return;
+  }
+
   const vy0 = -(560 + dist * 0.75);
   const T = (2 * Math.abs(vy0)) / CFG.gravity;
   const vx = dist / T;
@@ -2208,6 +2528,21 @@ function drawPlayer(now) {
   const ty = topY();
   const sx = player.x - camX;
 
+  // 直线冲刺：从起跳点拉一条水平虚线到脚下，把「这条线是直的」画明白
+  if (player.state === 'glide') {
+    const fromX = player.dashFromX === undefined ? player.x : player.dashFromX;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 8]);
+    ctx.beginPath();
+    ctx.moveTo(fromX - camX, ty - 15);
+    ctx.lineTo(sx, ty - 15);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   if (player.state !== 'fall' && player.state !== 'dead') {
     const alt = Math.max(0, ty - player.y);
     const alpha = Math.max(0, 0.24 - alt * 0.00055);
@@ -2233,7 +2568,10 @@ function drawPlayer(now) {
   ctx.save();
   // 待机轻轻呼吸，画面不至于「死」在那里
   const bob = (player.state === 'idle' && !charging) ? Math.sin(now * 0.0024) * 1.1 : 0;
-  ctx.translate(sx, player.y + bob);
+  // 直线冲刺时整条轨迹贴地飞，画的时候抬高一点、影子留在原位，
+  // 一眼就能看出「从柱顶掠过去」而不是贴着地面滑
+  const dashLift = player.state === 'glide' ? 15 : 0;
+  ctx.translate(sx, player.y - dashLift + bob);
 
   if (player.state === 'jump' || player.state === 'fall') {
     ctx.translate(0, -17);
@@ -2252,8 +2590,24 @@ function drawPlayer(now) {
     const st = Math.min(1, Math.abs(player.vy) / 900);
     sys = 1 + st * 0.14;
     sxs = 1 - st * 0.09;
+  } else if (player.state === 'glide') {
+    // 冲刺：横向拉长、纵向压扁，像被弹射出去
+    sxs = 1.18; sys = 0.88;
   }
   ctx.scale(sxs, sys);
+
+  const sk = SKIN();
+
+  // 皮肤自带的光晕，画在身体底下
+  if (sk.glow) {
+    const gg = ctx.createRadialGradient(0, -18, 2, 0, -18, 34);
+    gg.addColorStop(0, sk.glow);
+    gg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.arc(0, -18, 34, 0, SKIN_TAU);
+    ctx.fill();
+  }
 
   if (playerSprite) {
     ctx.drawImage(
@@ -2266,7 +2620,7 @@ function drawPlayer(now) {
   const look = charging ? 1.6 * charge : 0;
   const g = eyeGlow;
 
-  ctx.fillStyle = '#2b2320';
+  ctx.fillStyle = sk.eye || '#2b2320';
   ctx.beginPath();
   ctx.arc(-5.5 + look, -20.4, 3.1, 0, Math.PI * 2);
   ctx.arc(5.5 + look, -20.4, 3.1, 0, Math.PI * 2);
@@ -2574,7 +2928,7 @@ function exportBoardImage() {
       g.textAlign = 'left';
       g.fillStyle = 'rgba(255,255,255,0.92)';
       g.font = 'bold 15px ' + FONT_FAMILY;
-      g.fillText(String(e.n || '玩家').slice(0, 12), 66, mid);
+      g.fillText(String(e.n || '玩家').slice(0, 12) + (e.m === 'hard' ? ' [难]' : ''), 66, mid);
 
       g.textAlign = 'right';
       g.fillStyle = '#ffffff';
@@ -2820,7 +3174,23 @@ function drawBoard() {
       ctx.textAlign = 'left';
       ctx.fillStyle = isLast ? '#ffe57a' : 'rgba(255,255,255,0.92)';
       ctx.font = fontOf(fMain, 'bold');
-      ctx.fillText(fitText(e.n || '玩家', nameMax), nameX, midY);
+      // 条目带了模式标记就在名字后面点一个小胶囊（简 / 难）
+      const tag = e.m === 'hard' ? '难' : (e.m === 'easy' ? '简' : '');
+      const tagW = tag ? 16 * k : 0;
+      const nmTxt = fitText(e.n || '玩家', nameMax - tagW);
+      ctx.fillText(nmTxt, nameX, midY);
+      if (tag) {
+        const tx0 = nameX + ctx.measureText(nmTxt).width + 5 * k;
+        const th = Math.min(14 * k, rowH * 0.46);
+        ctx.fillStyle = e.m === 'hard' ? 'rgba(255,176,96,0.92)' : 'rgba(126,233,168,0.88)';
+        rr(ctx, tx0, midY - th / 2, tagW - 3 * k, th, th / 2);
+        ctx.fill();
+        ctx.fillStyle = '#16301f';
+        ctx.font = fontOf(th * 0.66, 'bold');
+        ctx.textAlign = 'center';
+        ctx.fillText(tag, tx0 + (tagW - 3 * k) / 2, midY + 0.5);
+        ctx.textAlign = 'left';
+      }
 
       ctx.textAlign = 'right';
       ctx.fillStyle = isLast ? '#ffe57a' : '#ffffff';
@@ -2891,12 +3261,41 @@ function drawUI(now) {
   const subX = (land ? 24 : 28) * k;
   const subY = uiTop + scoreSize * 0.99 + (land ? 4 : 6) * k;
 
+  const bestTxt = '最高 ' + best;
   ctx.font = fontOf(subSize);
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(24, 58, 34, 0.34)';
-  ctx.strokeText('最高 ' + best, subX, subY);
+  ctx.strokeText(bestTxt, subX, subY);
   ctx.fillStyle = 'rgba(255,255,255,0.86)';
-  ctx.fillText('最高 ' + best, subX, subY);
+  ctx.fillText(bestTxt, subX, subY);
+
+  // 难度徽标：跟着「最高」后面，一眼看出这局是哪个模式
+  {
+    const M = MODE();
+    const chipH = subSize * 1.22;
+    const chipY = subY + subSize * 0.06;
+    const chipX = subX + ctx.measureText(bestTxt).width + 8 * k;
+    ctx.font = fontOf(subSize * 0.82, 'bold');
+    const chipW = ctx.measureText(M.name).width + 15 * k;
+    ctx.fillStyle = M.arc ? 'rgba(126,233,168,0.92)' : 'rgba(255,176,96,0.94)';
+    rr(ctx, chipX, chipY, chipW, chipH, chipH / 2);
+    ctx.fill();
+    ctx.fillStyle = '#12331e';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(M.name, chipX + chipW / 2, chipY + chipH / 2 + 0.5);
+    // 困难模式再点一个小字，说明「没有抛物线」
+    if (!M.arc) {
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(255,214,160,0.92)';
+      ctx.font = fontOf(subSize * 0.82);
+      ctx.fillText('直线', chipX + chipW + 7 * k, chipY + chipH / 2 + 0.5);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(255,255,255,0.86)';
+    ctx.font = fontOf(subSize);
+  }
 
   if (combo >= 2) {
     const cy2 = subY + subSize * 1.75;
@@ -3061,15 +3460,21 @@ function drawPaused() {
   });
 
   const by3 = by2 + bh2 + gap;
-  drawToggle(W / 2 - bw / 2, by3, colW, bh3, !muted, muted ? '音效 关' : '音效 开');
-  drawToggle(W / 2 + gap / 2, by3, colW, bh3, hapticsOn, hapticsOn ? '震动 开' : '震动 关');
-  addHit(W / 2 - bw / 2, by3, colW, bh3, function () { setMuted(!muted); });
-  addHit(W / 2 + gap / 2, by3, colW, bh3, function () { setHaptics(!hapticsOn); });
+  drawPill(W / 2 - bw / 2, by3, bw, bh3,
+    'rgba(255,255,255,0.24)', 'rgba(255,255,255,0.12)',
+    '设置 · ' + MODE().name + ' / ' + SKIN().name, 12.5 * k);
+  addHit(W / 2 - bw / 2, by3, bw, bh3, function () { settingsOpen = true; });
+
+  const by4 = by3 + bh3 + gap;
+  drawToggle(W / 2 - bw / 2, by4, colW, bh3, !muted, muted ? '音效 关' : '音效 开');
+  drawToggle(W / 2 + gap / 2, by4, colW, bh3, hapticsOn, hapticsOn ? '震动 开' : '震动 关');
+  addHit(W / 2 - bw / 2, by4, colW, bh3, function () { setMuted(!muted); });
+  addHit(W / 2 + gap / 2, by4, colW, bh3, function () { setHaptics(!hapticsOn); });
 
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.60)';
   ctx.font = fontOf((land ? 12 : 13) * k);
-  ctx.fillText('点击空白处继续游戏', W / 2, by3 + bh3 + (land ? 22 : 28) * k);
+  ctx.fillText('点击空白处继续游戏', W / 2, by4 + bh3 + (land ? 20 : 26) * k);
 }
 
 function drawOver() {
@@ -3119,7 +3524,7 @@ function drawOver() {
   ctx.fillStyle = 'rgba(255,255,255,0.60)';
   ctx.font = fontOf(12 * k);
   ctx.fillText(
-    lastRank > 0 ? '最高分 ' + best + '   ·   本局第 ' + lastRank + ' 名' : '最高分  ' + best,
+    (MODE().name + ' · ') + (lastRank > 0 ? '最高分 ' + best + '   ·   第 ' + lastRank + ' 名' : '最高分  ' + best),
     W / 2, cy + ch * 0.43
   );
 
@@ -3155,27 +3560,301 @@ function drawOver() {
     ctx.fillText(stats[i][0], sx, cy + ch * 0.675);
   }
 
-  // 按钮：再来一次 + 排行榜
+  // 按钮：再来一次 + 排行榜 + 设置
   const bh = (land ? 44 : 50) * k;
   const by = cy + ch * 0.775;
-  const gap = 10 * k;
-  const bw1 = Math.min(cw * 0.50, 152 * k);
-  const bw2 = Math.min(cw * 0.32, 98 * k);
-  const total = bw1 + gap + bw2;
+  const gap = 9 * k;
+  const bw1 = Math.min(cw * 0.42, 132 * k);
+  const bw2 = Math.min(cw * 0.28, 92 * k);
+  const bw3 = Math.min(cw * 0.24, 82 * k);
+  const total = bw1 + bw2 + bw3 + gap * 2;
   const bx1 = W / 2 - total / 2;
   const bx2 = bx1 + bw1 + gap;
+  const bx3 = bx2 + bw2 + gap;
 
-  drawPill(bx1, by, bw1, bh, '#63d977', '#38974a', '再来一次', 15.5 * k);
-  drawPill(bx2, by, bw2, bh, 'rgba(255,255,255,0.24)', 'rgba(255,255,255,0.12)', '排行榜', 13.5 * k);
+  drawPill(bx1, by, bw1, bh, '#63d977', '#38974a', '再来一次', 15 * k);
+  drawPill(bx2, by, bw2, bh, 'rgba(255,255,255,0.24)', 'rgba(255,255,255,0.12)', '排行榜', 12.5 * k);
+  drawPill(bx3, by, bw3, bh, 'rgba(255,255,255,0.24)', 'rgba(255,255,255,0.12)', '设置', 12.5 * k);
 
   addHit(bx1, by, bw1, bh, restartGame);
   addHit(bx2, by, bw2, bh, function () { boardOpen = true; });
+  addHit(bx3, by, bw3, bh, function () { settingsOpen = true; });
 
   ctx.fillStyle = 'rgba(255,255,255,0.42)';
   ctx.font = fontOf(10.5 * k);
   ctx.fillText('点击空白处重新开始', W / 2, by + bh + 15 * k);
 
   ctx.globalAlpha = 1;
+}
+
+/* 皮肤小头像：设置面板里用，跟场景里的小人同一套配色 */
+function drawSkinAvatar(cx, cy, r, sk, unlocked) {
+  ctx.save();
+  ctx.globalAlpha = unlocked ? 1 : 0.40;
+
+  if (sk.glow) {
+    const gg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.9);
+    gg.addColorStop(0, sk.glow);
+    gg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 1.9, 0, SKIN_TAU);
+    ctx.fill();
+  }
+
+  if (sk.ears === 'antenna') {
+    ctx.strokeStyle = sk.band[0];
+    ctx.lineWidth = Math.max(1.2, r * 0.11);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.34, cy - r * 0.48);
+    ctx.lineTo(cx - r * 0.60, cy - r * 1.10);
+    ctx.moveTo(cx + r * 0.34, cy - r * 0.48);
+    ctx.lineTo(cx + r * 0.60, cy - r * 1.10);
+    ctx.stroke();
+    ctx.fillStyle = sk.ear[1];
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.60, cy - r * 1.10, r * 0.17, 0, SKIN_TAU);
+    ctx.arc(cx + r * 0.60, cy - r * 1.10, r * 0.17, 0, SKIN_TAU);
+    ctx.fill();
+  } else if (sk.ears === 'leaf') {
+    ctx.fillStyle = sk.band[0];
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.40, cy - r * 0.62);
+    ctx.quadraticCurveTo(cx - r * 1.05, cy - r * 1.05, cx - r * 0.52, cy - r * 1.32);
+    ctx.quadraticCurveTo(cx - r * 0.10, cy - r * 1.00, cx - r * 0.40, cy - r * 0.62);
+    ctx.fill();
+    ctx.fillStyle = sk.ear[0];
+    ctx.beginPath();
+    ctx.arc(cx + r * 0.46, cy - r * 0.70, r * 0.26, 0, SKIN_TAU);
+    ctx.fill();
+    ctx.fillStyle = sk.ear[1];
+    ctx.beginPath();
+    ctx.arc(cx + r * 0.46, cy - r * 0.70, r * 0.13, 0, SKIN_TAU);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = sk.ear[0];
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.46, cy - r * 0.66, r * 0.27, 0, SKIN_TAU);
+    ctx.arc(cx + r * 0.46, cy - r * 0.66, r * 0.27, 0, SKIN_TAU);
+    ctx.fill();
+    ctx.fillStyle = sk.ear[1];
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.46, cy - r * 0.68, r * 0.13, 0, SKIN_TAU);
+    ctx.arc(cx + r * 0.46, cy - r * 0.68, r * 0.13, 0, SKIN_TAU);
+    ctx.fill();
+  }
+
+  // 身体
+  const bg = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+  bg.addColorStop(0, sk.body[0]);
+  bg.addColorStop(1, sk.body[1]);
+  ctx.fillStyle = bg;
+  rr(ctx, cx - r * 0.76, cy - r * 0.66, r * 1.52, r * 1.48, r * 0.5);
+  ctx.fill();
+
+  if (sk.pattern === 'stripe') {
+    ctx.save();
+    ctx.beginPath();
+    rr(ctx, cx - r * 0.76, cy - r * 0.66, r * 1.52, r * 1.48, r * 0.5);
+    ctx.clip();
+    ctx.fillStyle = sk.band[0];
+    ctx.fillRect(cx - r * 0.8, cy - r * 0.16, r * 1.6, r * 0.22);
+    ctx.fillRect(cx - r * 0.8, cy + r * 0.30, r * 1.6, r * 0.22);
+    ctx.restore();
+  }
+
+  // 眼睛
+  ctx.fillStyle = sk.eye || '#2b2320';
+  ctx.beginPath();
+  ctx.arc(cx - r * 0.28, cy - r * 0.12, r * 0.15, 0, SKIN_TAU);
+  ctx.arc(cx + r * 0.28, cy - r * 0.12, r * 0.15, 0, SKIN_TAU);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/* ============================================================
+ *  19b. 设置面板（难度 + 皮肤）
+ * ============================================================ */
+function drawSettings() {
+  const land = isLandscape();
+  const k = uiScale();
+  const M = MODE();
+
+  ctx.fillStyle = 'rgba(8, 22, 14, 0.80)';
+  ctx.fillRect(0, 0, W, H);
+
+  const cw = Math.min(W * 0.92, (land ? 470 : 336) * k);
+  const cols = land ? 6 : 3;
+  const chipH = (land ? 56 : 76) * k;
+  const rows = Math.ceil(SKINS.length / cols);
+  const gapY = 9 * k;
+  const headH = (land ? 130 : 190) * k;
+  const footH = (land ? 58 : 62) * k;
+  const ch = Math.min(H * 0.94, headH + rows * chipH + (rows - 1) * gapY + footH);
+  const cx = W / 2 - cw / 2;
+  const cy = H / 2 - ch / 2;
+  const padX = 18 * k;
+
+  const pg = ctx.createLinearGradient(0, cy, 0, cy + ch);
+  pg.addColorStop(0, 'rgba(42, 80, 54, 0.98)');
+  pg.addColorStop(1, 'rgba(20, 46, 30, 0.98)');
+  ctx.fillStyle = pg;
+  rr(ctx, cx, cy, cw, ch, 20 * k);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // 点面板本身不吃到「关闭」
+  addHit(cx, cy, cw, ch, function () {});
+
+  // 标题
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = fontOf(17 * k, 'bold');
+  ctx.fillText('设置', cx + padX, cy + 26 * k);
+
+  // 临时提示（解锁 / 换装）
+  if (settingsMsg && performance.now() - settingsMsgAt < 2000) {
+    const fade = 1 - clamp((performance.now() - settingsMsgAt - 1400) / 600, 0, 1);
+    ctx.textAlign = 'right';
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = '#ffd93b';
+    ctx.font = fontOf(10.5 * k, 'bold');
+    ctx.fillText(settingsMsg, cx + cw - 52 * k, cy + 26 * k);
+    ctx.globalAlpha = 1;
+  }
+
+  // 关闭
+  const closeR = 13 * k;
+  const ccx = cx + cw - 24 * k;
+  const ccy = cy + 26 * k;
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  ctx.arc(ccx, ccy, closeR, 0, SKIN_TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(1.5, 2 * k);
+  ctx.lineCap = 'round';
+  const xr = closeR * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(ccx - xr, ccy - xr); ctx.lineTo(ccx + xr, ccy + xr);
+  ctx.moveTo(ccx + xr, ccy - xr); ctx.lineTo(ccx - xr, ccy + xr);
+  ctx.stroke();
+  addHit(ccx - closeR - 10, ccy - closeR - 10, (closeR + 10) * 2, (closeR + 10) * 2, function () {
+    settingsOpen = false;
+  });
+
+  /* ---------------- 难度 ---------------- */
+  let y = cy + 50 * k;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = fontOf(11.5 * k, 'bold');
+  ctx.fillText('难度', cx + padX, y);
+  if (!land) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.34)';
+    ctx.font = fontOf(9.5 * k);
+    ctx.fillText('切换会重开一局', cx + cw - padX, y);
+  }
+  y += 14 * k;
+
+  const gap = 10 * k;
+  const mw = (cw - padX * 2 - gap) / 2;
+  const mh = (land ? 46 : 54) * k;
+  for (let i = 0; i < MODE_LIST.length; i++) {
+    const m = MODES[MODE_LIST[i]];
+    const bx = cx + padX + i * (mw + gap);
+    const on = modeKey === m.id;
+    ctx.fillStyle = on
+      ? (m.id === 'hard' ? 'rgba(255,176,96,0.20)' : 'rgba(126,233,168,0.20)')
+      : 'rgba(255,255,255,0.06)';
+    rr(ctx, bx, y, mw, mh, 12 * k);
+    ctx.fill();
+    ctx.strokeStyle = on ? m.color : 'rgba(255,255,255,0.14)';
+    ctx.lineWidth = on ? 2 : 1;
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = on ? '#ffffff' : 'rgba(255,255,255,0.72)';
+    ctx.font = fontOf((land ? 14 : 15.5) * k, 'bold');
+    ctx.fillText(m.name, bx + mw / 2, y + mh * 0.36);
+    ctx.fillStyle = on ? m.color : 'rgba(255,255,255,0.40)';
+    ctx.font = fontOf((land ? 9.5 : 10.5) * k);
+    ctx.fillText(m.sub, bx + mw / 2, y + mh * 0.73);
+    (function (key) {
+      addHit(bx, y, mw, mh, function () {
+        if (key !== modeKey) applyMode(key);
+      });
+    })(m.id);
+  }
+  y += mh + (land ? 12 : 16) * k;
+
+  // 说明
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.44)';
+  ctx.font = fontOf((land ? 9.5 : 10.5) * k);
+  ctx.fillText(M.arc ? '简单：抛物线跳跃 · 落点预览 · 平台更宽'
+                     : '困难：取消抛物线，直线冲刺 · 无落点预览 · 平台更窄',
+               cx + padX, y);
+  y += (land ? 20 : 24) * k;
+
+  /* ---------------- 皮肤 ---------------- */
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = fontOf(11.5 * k, 'bold');
+  ctx.fillText('皮肤', cx + padX, y);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.34)';
+  ctx.font = fontOf(9.5 * k);
+  ctx.fillText('历史最高 ' + overallBest() + ' 分', cx + cw - padX, y);
+  y += 13 * k;
+
+  const chipW = (cw - padX * 2 - gap * (cols - 1)) / cols;
+  for (let i = 0; i < SKINS.length; i++) {
+    const sk = SKINS[i];
+    const bx = cx + padX + (i % cols) * (chipW + gap);
+    const by = y + Math.floor(i / cols) * (chipH + gapY);
+    const unlocked = skinUnlocked(sk);
+    const sel = skinId === sk.id;
+
+    ctx.fillStyle = sel ? 'rgba(255,217,59,0.14)' : 'rgba(255,255,255,0.05)';
+    rr(ctx, bx, by, chipW, chipH, 12 * k);
+    ctx.fill();
+    if (sel) {
+      ctx.strokeStyle = 'rgba(255,217,59,0.85)';
+      ctx.lineWidth = 2 * k;
+      ctx.stroke();
+    }
+
+    const ar = Math.min(chipW * 0.27, (land ? 15 : 19) * k);
+    drawSkinAvatar(bx + chipW / 2, by + chipH * (land ? 0.44 : 0.42), ar, sk, unlocked);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = unlocked ? (sel ? '#ffe57a' : 'rgba(255,255,255,0.86)') : 'rgba(255,255,255,0.32)';
+    ctx.font = fontOf((land ? 9 : 10.5) * k, sel ? 'bold' : '');
+    ctx.fillText(sk.name, bx + chipW / 2, by + chipH * (land ? 0.80 : 0.79));
+
+    if (!unlocked) {
+      ctx.fillStyle = 'rgba(255,255,255,0.30)';
+      ctx.font = fontOf((land ? 7.5 : 8.5) * k);
+      ctx.fillText(sk.unlock + ' 分解锁', bx + chipW / 2, by + chipH * (land ? 0.93 : 0.92));
+    }
+
+    (function (skin) {
+      addHit(bx, by, chipW, chipH, function () { applySkin(skin); });
+    })(sk);
+  }
+  y += rows * chipH + (rows - 1) * gapY + 12 * k;
+
+  // 完成
+  const cbw = Math.min(cw * 0.6, 180 * k);
+  const cbh = (land ? 36 : 40) * k;
+  const cbx = W / 2 - cbw / 2;
+  drawPill(cbx, y, cbw, cbh, '#63d977', '#38974a', '好了', 14 * k);
+  addHit(cbx, y, cbw, cbh, function () { settingsOpen = false; });
 }
 
 function render(now) {
@@ -3220,10 +3899,10 @@ function render(now) {
   drawGlows(now);
   drawDuskTint();
   drawVignette();
+  clearHits();          // 先清再画：HUD 和面板都能注册可点区域
   drawUI(now);
-
-  clearHits();
-  if (boardOpen) drawBoard();
+  if (settingsOpen) drawSettings();
+  else if (boardOpen) drawBoard();
   else if (gameState === 'paused') drawPaused();
   else if (gameState === 'over') drawOver();
 }
