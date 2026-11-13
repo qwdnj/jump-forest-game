@@ -235,7 +235,30 @@ try {
 /* ============================================================
  *  3. 工具 & 屏幕方向
  * ============================================================ */
-function rand(a, b) { return a + Math.random() * (b - a); }
+/* ---- 随机源：普通局用 Math.random，每日挑战换成固定种子 ---- */
+/* 平台生成、弹簧/摆柱概率都走这里，所以「同一串种子 = 同一套平台」。
+   粒子、落叶这些纯视觉的随机也顺便跟着走，省得两套随机源打架。 */
+let rng = Math.random;
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashSeed(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+/* key 为空 → Math.random（普通局）；给了 key → 同一天所有人拿到同一套平台 */
+function setRunRng(key) { rng = key ? mulberry32(hashSeed('jf-daily|' + key)) : Math.random; }
+
+function rand(a, b) { return a + rng() * (b - a); }
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 
 /* 字体字符串缓存：避免每帧拼字符串 + 重复解析 */
@@ -443,6 +466,7 @@ function applyPerfLevel() {
   playerSprite = buildPlayerSprite();
   cloudSprite = buildCloudSprite();
   platSpriteCache.clear();
+  pauseSnap = null;                  // 分辨率变了，快照作废
   if (player && player.state === 'idle') player.y = topY();
 }
 
@@ -906,8 +930,9 @@ function saveBoard() {
 /* 把一局的成绩塞进榜里，返回名次（没进前 10 返回 0） */
 function addRunToBoard(sc) {
   if (!(sc > 0)) return 0;
-  // m = 模式标记，榜单里会标出这一局是简单还是困难
+  // m = 模式标记，榜单里会标出这一局是简单还是困难；d = 每日挑战的标记
   const entry = { s: sc, t: Date.now(), n: playerName, m: modeKey };
+  if (dailyKey) entry.d = 1;
   onlineSubmit();
   board.push(entry);
   board.sort(function (a, b) { return b.s - a.s || a.t - b.t; });
@@ -1090,13 +1115,16 @@ function toggleFullscreen() {
 board = loadBoard();
 let displayScore = 0;
 let dayT = 0, skyDayT = -1;      // skyDayT = 上次真正重建天空时的 dayT
-let maxCombo = 0, perfectCount = 0, rescueCount = 0;
+let maxCombo = 0, perfectCount = 0, rescueCount = 0, springCount = 0;
 let charging = false, charge = 0, chargeStart = 0;
 let wantCharge = false, chargeBufferAt = 0;   // 输入缓冲：落地前按下也能接上
 let jumpCount = 0;                            // 本局起跳次数（用于新手提示衰减）
 let chargeFullBeeped = false;
 let hitstop = 0;
 let overAt = 0, pauseAt = 0, shake = 0, tutorialDone = false;
+/* 暂停时把上一帧整张贴图存下来，面板每帧只贴这一张 + 画按钮，
+   不再把天空/树林/柱子/粒子整套重画一遍（省电、发热也低） */
+let pauseSnap = null;
 let moveT = 0;             // 摆动柱子的统一时钟（fixedUpdate 推进，保证判定和预览一致）
 let scorePop = 0;
 let punch = 0;              // 命中时镜头轻微推近
@@ -1140,6 +1168,8 @@ function saveBest() {
 /* 切换难度：换最高分 + 直接重开一局（难度是整套物理，不能中途换） */
 function applyMode(key) {
   if (!MODES[key]) return;
+  // 手动换难度就等于退出每日挑战（每日的难度是跟着日期定的）
+  if (dailyKey) exitDaily();
   modeKey = key;
   try { localStorage.setItem('jf_mode', modeKey); } catch (e) {}
   best = bestOfMode(modeKey);
@@ -1172,6 +1202,177 @@ function applySkin(sk) {
   beep(880, 0.07, 'sine', 0.10);
   beep(1180, 0.09, 'sine', 0.07, null, 0.06);
   vibrate(8);
+}
+
+/* ============================================================
+ *  9b. 每日挑战
+ * ============================================================ */
+/* 同一天 → 同一个种子 → 同一套平台，大家比的是同一条赛道。
+   难度按日期里的数字之和轮换（不看时区），所以不同国家的玩家也不会一个人跑简单、
+   一个人跑困难。 */
+const DAILY_KEY = 'jf_daily_v1';
+let dailyKey = null;        // 非空 = 当前这局是每日挑战（值就是 YYYY-MM-DD）
+let dailyBest = 0;          // 今天已经打出来的最好成绩
+
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+function dayKeyOf(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+function todayKey() { return dayKeyOf(new Date()); }
+
+function dailyModeOf(key) {
+  let sum = 0;
+  for (let i = 0; i < key.length; i++) {
+    const c = key.charCodeAt(i);
+    if (c >= 48 && c <= 57) sum += c - 48;
+  }
+  return sum % 2 === 0 ? 'easy' : 'hard';
+}
+
+function loadDailyRecord() {
+  dailyBest = 0;
+  try {
+    const j = JSON.parse(localStorage.getItem(DAILY_KEY) || 'null');
+    if (j && j.d === todayKey() && typeof j.b === 'number' && isFinite(j.b)) dailyBest = j.b;
+  } catch (e) {}
+}
+function saveDailyRecord() {
+  try {
+    localStorage.setItem(DAILY_KEY, JSON.stringify({ d: todayKey(), b: dailyBest }));
+  } catch (e) {}
+}
+
+/* 进每日挑战：换到当天难度 + 用当天种子重开一局 */
+function startDaily(keyOpt) {
+  const key = keyOpt || todayKey();
+  dailyKey = key;
+  modeKey = dailyModeOf(key);
+  try { localStorage.setItem('jf_mode', modeKey); } catch (e) {}
+  best = bestOfMode(modeKey);
+  loadDailyRecord();
+  settingsOpen = false; boardOpen = false; achOpen = false;
+  reset();
+  const M = MODE();
+  spawnPopup(camX + W / 2, topY() - 168, '每日挑战 · ' + key, '#ffd93b', 15);
+  spawnPopup(camX + W / 2, topY() - 138, M.name + '物理 · 同一套平台', 'rgba(255,255,255,0.92)', 13);
+  beep(660, 0.09, 'sine', 0.10);
+  beep(990, 0.13, 'sine', 0.08, null, 0.08);
+  vibrate(12);
+}
+
+function exitDaily() {
+  if (!dailyKey) return;
+  dailyKey = null;
+  settingsMsg = '已退出每日挑战';
+  settingsMsgAt = performance.now();
+}
+
+/* ============================================================
+ *  9c. 成就
+ * ============================================================ */
+const ACH_KEY = 'jf_ach_v1';
+const STATS_KEY = 'jf_stats_v1';
+const achUnlocked = Object.create(null);
+/* 跨局的累计数：单局内的完美/连击之类不写这里 */
+const STATS = { runs: 0, perfects: 0, springs: 0, rescues: 0, jumps: 0, dailyRuns: 0 };
+
+function loadAch() {
+  try {
+    const a = JSON.parse(localStorage.getItem(ACH_KEY) || '[]');
+    if (Array.isArray(a)) for (let i = 0; i < a.length; i++) achUnlocked[a[i]] = true;
+  } catch (e) {}
+}
+function saveAch() {
+  try { localStorage.setItem(ACH_KEY, JSON.stringify(Object.keys(achUnlocked))); } catch (e) {}
+}
+function loadStats() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STATS_KEY) || 'null');
+    if (s) for (const k in STATS) if (typeof s[k] === 'number' && isFinite(s[k])) STATS[k] = s[k];
+  } catch (e) {}
+}
+function saveStats() {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(STATS)); } catch (e) {}
+}
+
+const ACHS = [
+  { id: 'first_run',  name: '初来乍到',   desc: '完成第一局',        test: function () { return STATS.runs >= 1; } },
+  { id: 'perfect5',   name: '完美主义',   desc: '单局 5 次完美落地',  test: function () { return perfectCount >= 5; } },
+  { id: 'combo10',    name: '十连击',     desc: '单局连击达到 10',    test: function () { return maxCombo >= 10; } },
+  { id: 'spring3',    name: '弹簧信使',   desc: '单局踩中 3 个弹簧柱', test: function () { return springCount >= 3; } },
+  { id: 'rescue3',    name: '险象环生',   desc: '单局 3 次边缘救援',  test: function () { return rescueCount >= 3; } },
+  { id: 'score50',    name: '五十步',     desc: '单局 50 分',        test: function () { return score >= 50; } },
+  { id: 'hard30',     name: '硬核玩家',   desc: '困难模式单局 30 分', test: function () { return modeKey === 'hard' && score >= 30; } },
+  { id: 'daily7',     name: '每日一练',   desc: '累计 7 次每日挑战',  test: function () { return STATS.dailyRuns >= 7; } },
+  { id: 'skins6',     name: '衣橱大满贯', desc: '解锁全部 6 款皮肤',  test: function () { return SKINS.every(function (sk) { return skinUnlocked(sk); }); } },
+  { id: 'perfect50',  name: '妙手回春',   desc: '累计 50 次完美落地', test: function () { return STATS.perfects >= 50; } }
+];
+
+let achOpen = false;
+
+function achCount() {
+  let n = 0;
+  for (let i = 0; i < ACHS.length; i++) if (achUnlocked[ACHS[i].id]) n++;
+  return n;
+}
+
+/* 解锁检查：落地/结束时都调一次，条件满足就弹条并落盘 */
+function checkAch() {
+  let first = null, got = 0;
+  for (let i = 0; i < ACHS.length; i++) {
+    const a = ACHS[i];
+    if (achUnlocked[a.id]) continue;
+    let ok = false;
+    try { ok = !!a.test(); } catch (e) { ok = false; }
+    if (!ok) continue;
+    achUnlocked[a.id] = true;
+    got++;
+    if (!first) first = a;
+  }
+  if (!got) return 0;
+  saveAch();
+  toast('成就解锁 · ' + first.name, got > 1 ? '一口气解锁了 ' + got + ' 个' : first.desc);
+  vibrate([10, 40, 20]);
+  beep(1046, 0.10, 'sine', 0.11);
+  beep(1568, 0.16, 'sine', 0.09, null, 0.09);
+  return got;
+}
+
+/* 顶部成就条：滑下来、停 2 秒、淡出 */
+let toastTitle = '', toastSub = '', toastAt = 0;
+function toast(t, s) { toastTitle = t; toastSub = s || ''; toastAt = performance.now(); }
+
+function drawToast(now) {
+  if (!toastTitle) return;
+  const age = now - toastAt;
+  if (age < 0) return;
+  if (age > 3200) { toastTitle = ''; return; }
+
+  const inA = clamp(age / 220, 0, 1);
+  const outA = clamp((3200 - age) / 520, 0, 1);
+  const k = uiScale();
+  const tw = Math.min(W * 0.86, (toastSub ? 286 : 232) * k);
+  const th = (toastSub ? 50 : 38) * k;
+  const tx = W / 2 - tw / 2;
+  const ty = safeTop + (10 + (1 - inA) * -42) * k;
+
+  ctx.save();
+  ctx.globalAlpha = Math.min(inA, outA);
+  ctx.fillStyle = 'rgba(20, 44, 28, 0.94)';
+  rr(ctx, tx, ty, tw, th, 13 * k);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,217,59,0.88)';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffe57a';
+  ctx.font = fontOf((toastSub ? 12.5 : 13.5) * k, 'bold');
+  ctx.fillText('★ ' + toastTitle, W / 2, ty + th * (toastSub ? 0.34 : 0.5));
+  if (toastSub) {
+    ctx.fillStyle = 'rgba(255,255,255,0.80)';
+    ctx.font = fontOf(10.5 * k);
+    ctx.fillText(toastSub, W / 2, ty + th * 0.68);
+  }
+  ctx.restore();
 }
 
 /* ============================================================
@@ -1215,13 +1416,14 @@ function makePlatform(last) {
   const gMin = (58 + prog * 12 + deep * 16) * (1 - help);
   const gMax = Math.min(214, 148 + prog * 55 + deep * 14) * (1 - help);
   const gap = Math.min(268, rand(gMin, gMax) * M.gapMul);
-  const isSpring = score >= 3 && Math.random() < M.springChance;
+  // 注意：这里刻意用 rng() 而不是 Math.random() —— 每日挑战要能复现同一套平台
+  const isSpring = score >= 3 && rng() < M.springChance;
   // 会左右摆动的柱子：落点预览会按「落地那一刻」的位置算，所以不会骗人
-  const sway = (!isSpring && score >= 22 && Math.random() < M.swayChance)
+  const sway = (!isSpring && score >= 22 && rng() < M.swayChance)
     ? {
         amp: 8 + prog * 8 + deep * 4,
-        spd: 0.55 + Math.random() * 0.5,
-        ph: Math.random() * Math.PI * 2
+        spd: 0.55 + rng() * 0.5,
+        ph: rng() * Math.PI * 2
       }
     : null;
   const bx = last.baseX + last.w + gap;
@@ -1426,6 +1628,7 @@ function drawFireflies(now) {
  * ============================================================ */
 function reset() {
   stopChargeSound();
+  setRunRng(dailyKey);             // 每日挑战：换种子；普通局：回到 Math.random
   platforms = [];
   const firstW = 112;
   platforms.push({ x: W * 0.2, baseX: W * 0.2, w: firstW, squash: 0, spring: false, sway: null, sprite: null, spriteH: 0, glow: 0 });
@@ -1448,7 +1651,7 @@ function reset() {
   displayScore = 0;
   dayT = 0; skyDayT = 0;
   rebuildSky();                    // 修复：重开一局时天色还停在黄昏
-  maxCombo = 0; perfectCount = 0; rescueCount = 0;
+  maxCombo = 0; perfectCount = 0; rescueCount = 0; springCount = 0;
   charging = false; charge = 0; shake = 0;
   chargeFullBeeped = false;
   hitstop = 0;
@@ -1462,6 +1665,8 @@ function reset() {
   jumpCount = 0;
   boardOpen = false;
   settingsOpen = false;
+  achOpen = false;
+  pauseSnap = null;             // 新的一局，暂停快照作废
   lastRank = 0;
   particles = []; popups = []; rings = []; trail = [];
   gameState = 'playing';
@@ -1545,6 +1750,7 @@ function releaseCharge() {
     player.state = 'glide';
   }
   jumpCount++;
+  STATS.jumps++;
 
   spawnDust(player.x, topY(), 5, 0.7);
   vibrate(8);
@@ -1566,6 +1772,7 @@ function onDown(e) {
 
   if (settingsOpen) { settingsOpen = false; return; }   // 点空白处关掉设置
   if (boardOpen) { boardOpen = false; return; }         // 点空白处关闭排行榜
+  if (achOpen) { achOpen = false; settingsOpen = true; return; }  // 成就面板：点空白退回设置
 
   const mb = getMuteBtn();
   if (hitCircle(x, y, mb.x, mb.y, mb.r)) {
@@ -1620,6 +1827,7 @@ window.addEventListener('keydown', function (e) {
     }
   } else if (e.code === 'KeyP' || e.code === 'Escape') {
     e.preventDefault();
+    if (achOpen) { achOpen = false; settingsOpen = true; return; }
     if (settingsOpen) { settingsOpen = false; return; }
     if (boardOpen) { boardOpen = false; return; }
     if (gameState === 'playing' || gameState === 'paused') togglePause();
@@ -1661,17 +1869,35 @@ function togglePause() {
   if (gameState === 'over') return;
   boardOpen = false;
   settingsOpen = false;
+  achOpen = false;
 
   if (gameState === 'playing') {
     if (charging) { charging = false; charge = 0; stopChargeSound(); }
     gameState = 'paused';
     pauseAt = performance.now();
+    freezePauseSnapshot();     // 画布上还是上一帧，正好拿来当暂停背景
   } else if (gameState === 'paused') {
     const delta = performance.now() - pauseAt;
     chargeStart += delta;
     lastTime = performance.now();
     acc = 0;
+    pauseSnap = null;          // 恢复后要重新画整场
     gameState = 'playing';
+  }
+}
+
+/* 把当前画布整张贴进一张离屏画布。失败（极少见）就当没有快照，退回完整渲染。 */
+function freezePauseSnapshot() {
+  try {
+    const c = document.createElement('canvas');
+    c.width = canvas.width;
+    c.height = canvas.height;
+    const g = c.getContext('2d');
+    if (!g) { pauseSnap = null; return; }
+    g.drawImage(canvas, 0, 0);
+    pauseSnap = c;
+  } catch (e) {
+    pauseSnap = null;
   }
 }
 
@@ -1790,6 +2016,7 @@ function doLand(p, ty, rescued) {
       recentMisses++;
       score += 1 + EXTRA;
       rescueCount++;
+      STATS.rescues++;
       spawnDust(player.x, ty, 5, 0.8);
       spawnPopup(player.x, ty - 82, '惊险 +' + (1 + EXTRA), '#ffd54f', 18);
       shake = Math.min(shake + 2.5, 6);
@@ -1800,12 +2027,17 @@ function doLand(p, ty, rescued) {
     } else if (p.spring) {
       const gain = CFG.springBonus + (perfect ? 1 : 0) + EXTRA;
       score += gain;
+      springCount++;
+      STATS.springs++;
       if (perfect) {
         combo++;
         perfectCount++;
+        STATS.perfects++;
+        // 这里原本漏了 maxCombo：弹簧上的完美落地会连击但不计入「最高连击」
+        maxCombo = Math.max(maxCombo, combo);
         recentMisses = Math.max(0, recentMisses - 1);
         eyeGlow = 1.2;
-      punch = Math.max(punch, 1);
+        punch = Math.max(punch, 1);
       } else {
         combo = 0;
       }
@@ -1820,6 +2052,7 @@ function doLand(p, ty, rescued) {
     } else if (perfect) {
       combo++;
       perfectCount++;
+      STATS.perfects++;
       maxCombo = Math.max(maxCombo, combo);
       recentMisses = Math.max(0, recentMisses - 1);
       const bonus = combo >= 2 ? Math.min(combo - 1, 5) : 0;
@@ -1857,6 +2090,7 @@ function doLand(p, ty, rescued) {
     }
 
     checkMilestone(ty);
+    checkAch();
   } else if (rescued) {
     spawnPopup(player.x, ty - 82, '差一点', '#ffd54f', 16);
     spawnDust(player.x, ty, 4, 0.7);
@@ -1887,6 +2121,19 @@ function gameOver() {
   player.state = 'dead';
   if (score > best) { best = score; saveBest(); }
   lastRank = addRunToBoard(score);     // 进榜才返回名次
+
+  // 跨局统计 + 每日挑战成绩（都只写一次，失败也不影响这局）
+  STATS.runs++;
+  if (dailyKey) {
+    STATS.dailyRuns++;
+    if (dailyKey === todayKey() && score > dailyBest) {
+      dailyBest = score;
+      saveDailyRecord();
+    }
+  }
+  saveStats();
+  checkAch();
+
   spawnPopup(camX + W / 2, H * 0.36, '失足...', '#ff9b7a', 24);
   vibrate([30, 60, 40]);
   beep(400, 0.45, 'sawtooth', 0.09, 80);
@@ -3174,19 +3421,20 @@ function drawBoard() {
       ctx.textAlign = 'left';
       ctx.fillStyle = isLast ? '#ffe57a' : 'rgba(255,255,255,0.92)';
       ctx.font = fontOf(fMain, 'bold');
-      // 条目带了模式标记就在名字后面点一个小胶囊（简 / 难）
-      const tag = e.m === 'hard' ? '难' : (e.m === 'easy' ? '简' : '');
-      const tagW = tag ? 16 * k : 0;
+      // 条目带了模式标记就在名字后面点一个小胶囊（简 / 难，每日挑战再标「每日」）
+      const tag = e.d ? '每日' : (e.m === 'hard' ? '难' : (e.m === 'easy' ? '简' : ''));
+      const tagW = tag ? (e.d ? 30 * k : 16 * k) : 0;
       const nmTxt = fitText(e.n || '玩家', nameMax - tagW);
       ctx.fillText(nmTxt, nameX, midY);
       if (tag) {
         const tx0 = nameX + ctx.measureText(nmTxt).width + 5 * k;
         const th = Math.min(14 * k, rowH * 0.46);
-        ctx.fillStyle = e.m === 'hard' ? 'rgba(255,176,96,0.92)' : 'rgba(126,233,168,0.88)';
+        ctx.fillStyle = e.d ? 'rgba(255,217,59,0.92)'
+          : (e.m === 'hard' ? 'rgba(255,176,96,0.92)' : 'rgba(126,233,168,0.88)');
         rr(ctx, tx0, midY - th / 2, tagW - 3 * k, th, th / 2);
         ctx.fill();
         ctx.fillStyle = '#16301f';
-        ctx.font = fontOf(th * 0.66, 'bold');
+        ctx.font = fontOf(th * (e.d ? 0.52 : 0.66), 'bold');
         ctx.textAlign = 'center';
         ctx.fillText(tag, tx0 + (tagW - 3 * k) / 2, midY + 0.5);
         ctx.textAlign = 'left';
@@ -3275,17 +3523,25 @@ function drawUI(now) {
     const chipH = subSize * 1.22;
     const chipY = subY + subSize * 0.06;
     const chipX = subX + ctx.measureText(bestTxt).width + 8 * k;
+    const chipTxt = dailyKey ? '每日 · ' + M.name : M.name;
     ctx.font = fontOf(subSize * 0.82, 'bold');
-    const chipW = ctx.measureText(M.name).width + 15 * k;
-    ctx.fillStyle = M.arc ? 'rgba(126,233,168,0.92)' : 'rgba(255,176,96,0.94)';
+    const chipW = ctx.measureText(chipTxt).width + 15 * k;
+    ctx.fillStyle = dailyKey ? 'rgba(255,217,59,0.95)'
+      : (M.arc ? 'rgba(126,233,168,0.92)' : 'rgba(255,176,96,0.94)');
     rr(ctx, chipX, chipY, chipW, chipH, chipH / 2);
     ctx.fill();
     ctx.fillStyle = '#12331e';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(M.name, chipX + chipW / 2, chipY + chipH / 2 + 0.5);
-    // 困难模式再点一个小字，说明「没有抛物线」
-    if (!M.arc) {
+    ctx.fillText(chipTxt, chipX + chipW / 2, chipY + chipH / 2 + 0.5);
+    // 每日挑战：后面跟今天的最好成绩
+    if (dailyKey) {
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(255,231,150,0.92)';
+      ctx.font = fontOf(subSize * 0.82);
+      ctx.fillText('今日 ' + dailyBest, chipX + chipW + 7 * k, chipY + chipH / 2 + 0.5);
+    } else if (!M.arc) {
+      // 困难模式再点一个小字，说明「没有抛物线」
       ctx.textAlign = 'left';
       ctx.fillStyle = 'rgba(255,214,160,0.92)';
       ctx.font = fontOf(subSize * 0.82);
@@ -3515,6 +3771,13 @@ function drawOver() {
   ctx.font = fontOf(13 * k, 'bold');
   ctx.fillText(isRecord ? '★ 新纪录 ★' : '游戏结束', W / 2, cy + ch * 0.12);
 
+  // 每日挑战：把这局的日期和今天的最好成绩一并报出来
+  if (dailyKey) {
+    ctx.fillStyle = 'rgba(255,217,59,0.90)';
+    ctx.font = fontOf(10.5 * k, 'bold');
+    ctx.fillText('每日挑战 · ' + dailyKey + ' · 今日最高 ' + dailyBest, W / 2, cy + ch * 0.19);
+  }
+
   // 分数
   ctx.fillStyle = '#ffffff';
   ctx.font = fontOf(Math.min(cw * 0.30, 66 * k), 'bold');
@@ -3690,9 +3953,10 @@ function drawSettings() {
   const chipH = (land ? 56 : 76) * k;
   const rows = Math.ceil(SKINS.length / cols);
   const gapY = 9 * k;
-  const headH = (land ? 130 : 190) * k;
+  const headH = (land ? 190 : 198) * k;
   const footH = (land ? 58 : 62) * k;
-  const ch = Math.min(H * 0.94, headH + rows * chipH + (rows - 1) * gapY + footH);
+  const rowExtra = ((land ? 34 : 38) + 27) * k;   // 「每日挑战 / 成就」这一行（含下面的小字）
+  const ch = Math.min(H * 0.94, headH + rows * chipH + (rows - 1) * gapY + footH + rowExtra);
   const cx = W / 2 - cw / 2;
   const cy = H / 2 - ch / 2;
   const padX = 18 * k;
@@ -3801,6 +4065,36 @@ function drawSettings() {
                cx + padX, y);
   y += (land ? 20 : 24) * k;
 
+  /* ---------------- 每日挑战 / 成就 ---------------- */
+  {
+    const rw = (cw - padX * 2 - gap) / 2;
+    const rh = (land ? 34 : 38) * k;
+    const ry = y;
+    const onDaily = !!dailyKey;
+    drawPill(cx + padX, ry, rw, rh,
+      onDaily ? 'rgba(255,217,59,0.92)' : 'rgba(255,217,59,0.22)',
+      onDaily ? 'rgba(214,154,18,0.92)' : 'rgba(255,217,59,0.12)',
+      onDaily ? '重开今日挑战' : '每日挑战', 12.5 * k);
+    addHit(cx + padX, ry, rw, rh, function () { startDaily(); });
+
+    drawPill(cx + padX + rw + gap, ry, rw, rh,
+      'rgba(255,255,255,0.24)', 'rgba(255,255,255,0.12)',
+      '成就 ' + achCount() + '/' + ACHS.length, 12.5 * k);
+    addHit(cx + padX + rw + gap, ry, rw, rh, function () {
+      settingsOpen = false;
+      achOpen = true;
+    });
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,217,59,0.62)';
+    ctx.font = fontOf(9.5 * k);
+    ctx.fillText('今日最高 ' + dailyBest + ' 分', cx + padX + 2 * k, ry + rh + 9 * k);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.34)';
+    ctx.fillText('同一套平台，全球同题', cx + cw - padX - 2 * k, ry + rh + 9 * k);
+    y += rowExtra;
+  }
+
   /* ---------------- 皮肤 ---------------- */
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.55)';
@@ -3857,8 +4151,142 @@ function drawSettings() {
   addHit(cbx, y, cbw, cbh, function () { settingsOpen = false; });
 }
 
+/* ============================================================
+ *  19c. 成就面板
+ * ============================================================ */
+function drawAch() {
+  const land = isLandscape();
+  const k = uiScale();
+
+  ctx.fillStyle = 'rgba(8, 22, 14, 0.84)';
+  ctx.fillRect(0, 0, W, H);
+
+  const cols = 2;
+  const gap = 9 * k;
+  const rows = Math.ceil(ACHS.length / cols);
+  const cw = Math.min(W * 0.92, (land ? 470 : 344) * k);
+  const cardH = (land ? 40 : 52) * k;
+  const headH = (land ? 56 : 66) * k;
+  const footH = (land ? 52 : 58) * k;
+  const ch = Math.min(H * 0.94, headH + rows * cardH + (rows - 1) * gap + footH);
+  const cx = W / 2 - cw / 2;
+  const cy = H / 2 - ch / 2;
+  const padX = 16 * k;
+
+  const pg = ctx.createLinearGradient(0, cy, 0, cy + ch);
+  pg.addColorStop(0, 'rgba(40, 78, 52, 0.98)');
+  pg.addColorStop(1, 'rgba(20, 46, 30, 0.98)');
+  ctx.fillStyle = pg;
+  rr(ctx, cx, cy, cw, ch, 20 * k);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  addHit(cx, cy, cw, ch, function () {});
+
+  // 标题 + 进度
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = fontOf((land ? 15 : 17) * k, 'bold');
+  ctx.fillText('成就', cx + padX, cy + 26 * k);
+  const got = achCount();
+  ctx.textAlign = 'right';
+  ctx.fillStyle = got >= ACHS.length ? '#ffd93b' : 'rgba(255,255,255,0.52)';
+  ctx.font = fontOf(11 * k, 'bold');
+  ctx.fillText('已解锁 ' + got + ' / ' + ACHS.length, cx + cw - padX - 32 * k, cy + 26 * k);
+
+  // 关闭
+  const closeR = 12 * k;
+  const ccx = cx + cw - padX + 1 * k;
+  const ccy = cy + 26 * k;
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  ctx.arc(ccx, ccy, closeR, 0, SKIN_TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(1.4, 1.8 * k);
+  ctx.lineCap = 'round';
+  const xr = closeR * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(ccx - xr, ccy - xr); ctx.lineTo(ccx + xr, ccy + xr);
+  ctx.moveTo(ccx + xr, ccy - xr); ctx.lineTo(ccx - xr, ccy + xr);
+  ctx.stroke();
+  addHit(ccx - closeR - 8, ccy - closeR - 8, (closeR + 8) * 2, (closeR + 8) * 2, function () {
+    achOpen = false;
+    settingsOpen = true;
+  });
+
+  // 卡片
+  const cardW = (cw - padX * 2 - gap) / cols;
+  const top = cy + headH - 8 * k;
+  for (let i = 0; i < ACHS.length; i++) {
+    const a = ACHS[i];
+    const on = !!achUnlocked[a.id];
+    const bx = cx + padX + (i % cols) * (cardW + gap);
+    const by = top + Math.floor(i / cols) * (cardH + gap);
+
+    ctx.fillStyle = on ? 'rgba(255,217,59,0.13)' : 'rgba(255,255,255,0.045)';
+    rr(ctx, bx, by, cardW, cardH, 11 * k);
+    ctx.fill();
+    if (on) {
+      ctx.strokeStyle = 'rgba(255,217,59,0.60)';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+
+    // 左边的星：解锁=金色实心，未解锁=空心
+    const sr = (land ? 5 : 6) * k;
+    const sx = bx + 13 * k, sy = by + cardH / 2;
+    ctx.beginPath();
+    for (let p = 0; p < 10; p++) {
+      const ang = -Math.PI / 2 + p * Math.PI / 5;
+      const rr2 = p % 2 === 0 ? sr : sr * 0.45;
+      const px2 = sx + Math.cos(ang) * rr2, py2 = sy + Math.sin(ang) * rr2;
+      if (p === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+    }
+    ctx.closePath();
+    if (on) { ctx.fillStyle = '#ffd93b'; ctx.fill(); }
+    else { ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = 1.2; ctx.stroke(); }
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = on ? '#ffe57a' : 'rgba(255,255,255,0.58)';
+    ctx.font = fontOf((land ? 10.5 : 11.5) * k, 'bold');
+    ctx.fillText(a.name, bx + 24 * k, by + cardH * (land ? 0.34 : 0.36));
+
+    ctx.fillStyle = on ? 'rgba(255,255,255,0.66)' : 'rgba(255,255,255,0.34)';
+    ctx.font = fontOf((land ? 8 : 9) * k);
+    ctx.fillText(a.desc, bx + 24 * k, by + cardH * (land ? 0.70 : 0.71));
+  }
+
+  // 返回
+  const bw = Math.min(cw * 0.52, 168 * k);
+  const bh = (land ? 32 : 36) * k;
+  drawPill(W / 2 - bw / 2, cy + ch - footH + 2 * k, bw, bh, '#63d977', '#38974a', '返回', 13 * k);
+  addHit(W / 2 - bw / 2, cy + ch - footH + 2 * k, bw, bh, function () {
+    achOpen = false;
+    settingsOpen = true;
+  });
+}
+
 function render(now) {
   const ty = topY();
+
+  /* 暂停时用上一帧的整屏快照当背景：天空、树林、柱子、粒子都不用再画一遍。
+     设置/排行榜/成就这些面板本来就要自己铺一层半透明底，铺在快照上正合适。 */
+  if (gameState === 'paused' && pauseSnap) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(pauseSnap, 0, 0);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    clearHits();
+    if (achOpen) drawAch();
+    else if (settingsOpen) drawSettings();
+    else if (boardOpen) drawBoard();
+    else drawPaused();
+    drawToast(now);
+    return;
+  }
+
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
   ctx.save();
@@ -3901,10 +4329,12 @@ function render(now) {
   drawVignette();
   clearHits();          // 先清再画：HUD 和面板都能注册可点区域
   drawUI(now);
-  if (settingsOpen) drawSettings();
+  if (achOpen) drawAch();
+  else if (settingsOpen) drawSettings();
   else if (boardOpen) drawBoard();
   else if (gameState === 'paused') drawPaused();
   else if (gameState === 'over') drawOver();
+  drawToast(now);
 }
 
 /* ============================================================
@@ -3934,6 +4364,8 @@ function initLeaves() {
 let lastTime = performance.now();
 let acc = 0;
 
+let lastDrawAt = 0, lastLoopState = '';
+
 function loop(now) {
   requestAnimationFrame(loop);
 
@@ -3960,6 +4392,14 @@ function loop(now) {
     updatePerf(now, dt);             // 采样不受顿帧影响
   }
 
+  /* 暂停 / 结算 / 面板：画面基本是静止的，没必要跟着屏幕 120Hz 重画。
+     压到 ~30fps，可点区域和动画都还在，手感没区别，发热和耗电明显低。
+     状态刚变的那一帧必须马上画，不然按了暂停要等 30ms 才见到面板。 */
+  if (lastLoopState !== gameState) { lastLoopState = gameState; lastDrawAt = 0; }
+  const idleScene = gameState !== 'playing';
+  if (idleScene && lastDrawAt > 0 && now - lastDrawAt < 32) return;
+  lastDrawAt = now;
+
   render(now);
 }
 
@@ -3983,6 +4423,7 @@ function onResize() {
   }
   initLeaves();
   initFireflies();
+  pauseSnap = null;          // 尺寸变了，旧快照对不上
 }
 
 let resizeTimer = 0;
@@ -4003,6 +4444,9 @@ if (screen.orientation && screen.orientation.addEventListener) {
 /* ============================================================
  *  23. 启动
  * ============================================================ */
+loadAch();           // 成就 / 累计数据 / 每日记录要在第一次 reset 之前读
+loadStats();
+loadDailyRecord();
 resizeCanvas();
 buildScene();
 reset();
