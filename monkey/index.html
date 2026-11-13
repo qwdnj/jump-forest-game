@@ -1430,6 +1430,26 @@ function drawMonkey(){
   const faceLight = mixColor(skin.face, "#ffffff", 0.38);
   const faceDark = mixColor(skin.face, "#7c4a22", 0.28);
 
+  /* ---------- 毛边工具 ----------
+     在轮廓上伸出来的一圈小三角，比描边像「毛」得多；
+     长度用固定噪声取，所以每一帧长得一样，不会抖。 */
+  const nz = function (n) {
+    const t = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return t - Math.floor(t);
+  };
+  const furDark = mixColor(skin.color, "#2a1508", 0.26);
+  const furMid = mixColor(skin.color, "#2a1508", 0.10);
+  const furLight = mixColor(skin.color, "#ffffff", 0.20);
+  function furTuft(cx, cy, ang, r0, len, half, color){
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+    ctx.lineTo(cx + Math.cos(ang - half) * (r0 + len), cy + Math.sin(ang - half) * (r0 + len));
+    ctx.lineTo(cx + Math.cos(ang + half) * (r0 + len * 0.82), cy + Math.sin(ang + half) * (r0 + len * 0.82));
+    ctx.closePath();
+    ctx.fill();
+  }
+
   /* ---------- 地面阴影：跳得越高越淡越小 ---------- */
   const lift = clamp((ground - MONKEY_H - monkey.y) / 140, 0, 1);
   if(lift < 0.99){
@@ -1465,6 +1485,10 @@ function drawMonkey(){
   ctx.moveTo(-9, -14);
   ctx.bezierCurveTo(-24, -12, -34, -24 + sway, -26.5, -37 + sway);
   ctx.stroke();
+  // 尾巴尖的一圈短炸毛
+  for(let i=0;i<5;i++){
+    furTuft(-26.5, -37 + sway, -0.5 + i * 0.5, 4.1, 1.3 + nz(i * 2.9) * 1.1, 0.18, i % 2 ? furDark : furMid);
+  }
   ctx.fillStyle = mixColor(skin.color, "#ffffff", 0.22);
   ctx.beginPath();
   ctx.arc(-26.5, -37 + sway, 4.4, 0, TAU);
@@ -1546,8 +1570,15 @@ function drawMonkey(){
   ctx.ellipse(0.6, -21.6, 9.6, 10.2, 0, 0, TAU);
   ctx.fill();
 
-  // 身侧几根毛，别画太密
-  ctx.strokeStyle = "rgba(40,20,8,0.12)";
+  // 身体下沿的毛边（左右各四撮，从腰到屁股）
+  for(let i=0;i<4;i++){
+    const a = 0.66 + i * 0.46;
+    furTuft(0, -23, a, 13.7, 1.4 + nz(i * 2.3) * 1.4, 0.085, i % 2 ? furDark : furMid);
+    furTuft(0, -23, Math.PI - a, 13.7, 1.4 + nz(i * 2.3 + 1) * 1.4, 0.085, i % 2 ? furMid : furDark);
+  }
+
+  // 身侧几根软毛，别画太密
+  ctx.strokeStyle = "rgba(40,20,8,0.14)";
   ctx.lineWidth = 1.4;
   for(let i=0;i<5;i++){
     const a = -1.9 + i * 0.42;
@@ -1568,6 +1599,21 @@ function drawMonkey(){
     ctx.beginPath();
     ctx.arc(ex, -47, 3.3, 0, TAU);
     ctx.fill();
+
+    // 耳朵外沿两撮短毛
+    const dir = i ? 1 : -1;
+    for(let k=0;k<2;k++){
+      const ea = dir * (-0.6 + k * 1.1);
+      furTuft(ex, -47, ea, 6.0, 1.3 + nz(k * 3.7 + i) * 1.1, 0.16, k ? furDark : furMid);
+    }
+  }
+
+  /* ---------- 头的毛边：画在头之前，只露出发梢 ----------
+     短、密、颜色统一 —— 太长会变成「太阳光芒」，反而脏。 */
+  for(let i=0;i<21;i++){
+    const a = -Math.PI * 0.99 + (i / 20) * Math.PI * 0.98;
+    const len = 1.2 + nz(i * 3.1) * 1.6;
+    furTuft(0, -45, a, 14.6, len, 0.062 + nz(i * 1.7) * 0.03, i % 2 ? furMid : furDark);
   }
 
   /* ---------- 头 ---------- */
@@ -1579,6 +1625,17 @@ function drawMonkey(){
   ctx.beginPath();
   ctx.arc(0, -45, 15.2, 0, TAU);
   ctx.fill();
+
+  // 额头几缕碎毛（顺着高光方向）
+  ctx.strokeStyle = "rgba(46, 24, 10, 0.22)";
+  ctx.lineWidth = 1.1;
+  ctx.lineCap = "round";
+  for(let i=0;i<4;i++){
+    ctx.beginPath();
+    ctx.moveTo(-8 + i * 4.6, -55.4);
+    ctx.quadraticCurveTo(-6 + i * 4.6, -57.6, -3.2 + i * 4.6, -56.8);
+    ctx.stroke();
+  }
 
   // 头顶那撮毛
   ctx.fillStyle = dark;

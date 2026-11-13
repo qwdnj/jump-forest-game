@@ -1176,6 +1176,7 @@ function buildScene() {
  * ============================================================ */
 let gameState = 'playing';
 let platforms = [];
+let platSeq = 0;              // 已生成的柱子总数：用来做「隔一根石砖」的材质轮换
 let player = null;
 let camX = 0;
 let score = 0, best = 0, combo = 0;
@@ -1720,6 +1721,13 @@ function makePlatform(last) {
     : null;
   const bx = last.baseX + last.w + gap;
 
+  // 石砖柱：隔一根换一次材质（纯外观，物理完全一样）。
+  // 用「数组里现在有几根」定位，所以每日挑战同一个种子长出来的砖柱位置也一样。
+  // 注意先自增再判断：写成 platSeq++ && … 会因为短路让弹簧/摆柱不占序号，
+  // 后面两根普通柱就可能撞成同一种材质（mode-test 里盯着这条）。
+  const seq = platSeq++;
+  const brick = !isSpring && !sway && (seq % 2 === 1);
+
   return {
     x: sway ? bx + Math.sin(moveT * sway.spd + sway.ph) * sway.amp : bx,
     baseX: bx,
@@ -1727,6 +1735,7 @@ function makePlatform(last) {
     squash: 0,
     spring: isSpring,
     sway: sway,
+    brick: brick,
     sprite: null,
     spriteH: 0,
     glow: 0
@@ -1751,6 +1760,7 @@ function ensurePlatforms() {
 function buildPlatformSprite(kind, bucket, columnH) {
   const isSpring = kind === 'spring';
   const isSway = kind === 'sway';
+  const isBrick = kind === 'brick';
   const padX = 16;
   const top = PLAT_TOP_PAD + 2;
   const w = bucket + padX * 2;
@@ -1779,6 +1789,13 @@ function buildPlatformSprite(kind, bucket, columnH) {
     grd.addColorStop(0.56, '#a3c6cc');
     grd.addColorStop(0.80, '#6b8c96');
     grd.addColorStop(1.00, '#2d4048');
+  } else if (isBrick) {
+    grd.addColorStop(0.00, '#4b4d46');
+    grd.addColorStop(0.12, '#7d8077');
+    grd.addColorStop(0.34, '#9fa298');
+    grd.addColorStop(0.56, '#b2b5aa');
+    grd.addColorStop(0.80, '#83867c');
+    grd.addColorStop(1.00, '#43453f');
   } else {
     grd.addColorStop(0.00, '#452812');
     grd.addColorStop(0.12, '#74441f');
@@ -1842,6 +1859,58 @@ function buildPlatformSprite(kind, bucket, columnH) {
       g.arc(rx + 0.6, ry + 0.7, 1.1, 0, Math.PI * 2);
       g.fill();
     }
+  } else if (isBrick) {
+    /* 石砖：错缝排列，每块砖单独调一点明暗，才不会像贴了张壁纸 */
+    const bh = 26;                                  // 砖高
+    const bw = Math.max(34, width * 0.46);          // 砖长
+    const mortar = 2.6;
+    g.fillStyle = 'rgba(74, 77, 70, 0.92)';         // 灰缝底色
+    g.fillRect(left, 0, width, h);
+
+    for (let row = 0, y = 4; y < h; y += bh, row++) {
+      const offset = (row % 2) * (bw * 0.5);
+      for (let x = left - bw + offset; x < right; x += bw) {
+        const seed = row * 7.3 + x * 0.21;
+        const tone = 0.80 + rnd(seed) * 0.30;
+        const bx0 = Math.max(left, x + mortar * 0.5);
+        const bx1 = Math.min(right, x + bw - mortar * 0.5);
+        const by0 = y + mortar * 0.5;
+        const by1 = Math.min(h, y + bh - mortar * 0.5);
+        if (bx1 - bx0 < 5 || by1 - by0 < 5) continue;
+
+        const rr0 = Math.round(150 * tone), rg0 = Math.round(152 * tone), rb0 = Math.round(146 * tone);
+        const brickGrad = g.createLinearGradient(bx0, by0, bx0, by1);
+        brickGrad.addColorStop(0, 'rgb(' + (rr0 + 20) + ',' + (rg0 + 20) + ',' + (rb0 + 18) + ')');
+        brickGrad.addColorStop(0.55, 'rgb(' + rr0 + ',' + rg0 + ',' + rb0 + ')');
+        brickGrad.addColorStop(1, 'rgb(' + (rr0 - 26) + ',' + (rg0 - 26) + ',' + (rb0 - 24) + ')');
+        g.fillStyle = brickGrad;
+        g.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+
+        // 砖面上沿的亮线，砖块才有厚度
+        g.fillStyle = 'rgba(255,255,255,0.12)';
+        g.fillRect(bx0 + 1, by0 + 1, bx1 - bx0 - 2, 1.6);
+
+        // 偶尔一个坑洼 / 缺角
+        if (rnd(seed + 3.3) > 0.74) {
+          g.fillStyle = 'rgba(56, 58, 52, 0.22)';
+          g.beginPath();
+          g.ellipse(bx0 + (bx1 - bx0) * rnd(seed + 1.7),
+                    by0 + (by1 - by0) * rnd(seed + 2.9),
+                    3.4, 2.1, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    }
+
+    // 砖缝里钻出来的苔藓
+    g.fillStyle = 'rgba(104, 148, 74, 0.28)';
+    for (let i = 0; i < 7; i++) {
+      const mx = left + rnd(i * 4.1 + 0.7) * width;
+      const my = 14 + rnd(i * 9.3 + 2.1) * Math.min(200, h * 0.34);
+      g.beginPath();
+      g.ellipse(mx, my, 6 + rnd(i * 2.7) * 7, 3.4 + rnd(i * 5.3) * 4, 0, 0, Math.PI * 2);
+      g.fill();
+    }
   } else {
     // 木纹：竖向的年轮 + 两个结疤
     for (let i = 0; i < 5; i++) {
@@ -1901,9 +1970,9 @@ function buildPlatformSprite(kind, bucket, columnH) {
   g.restore();
 
   /* ---------- 3. 顶部盖板 ---------- */
-  const capLight = isSpring ? '#b7ec8d' : (isSway ? '#bfeefb' : '#e2b982');
-  const capMid = isSpring ? '#7cc95a' : (isSway ? '#8fd3e4' : '#c08e52');
-  const capDark = isSpring ? '#3f7a2f' : (isSway ? '#3d7f93' : '#6a3f1c');
+  const capLight = isSpring ? '#b7ec8d' : (isSway ? '#bfeefb' : (isBrick ? '#d6d7cd' : '#e2b982'));
+  const capMid = isSpring ? '#7cc95a' : (isSway ? '#8fd3e4' : (isBrick ? '#aeb0a6' : '#c08e52'));
+  const capDark = isSpring ? '#3f7a2f' : (isSway ? '#3d7f93' : (isBrick ? '#6b6d64' : '#6a3f1c'));
 
   g.beginPath();
   g.moveTo(left - 2, capH);
@@ -1954,7 +2023,7 @@ function buildPlatformSprite(kind, bucket, columnH) {
   }
 
   /* 盖板上的草：三撮 */
-  g.strokeStyle = isSpring ? '#3d7f30' : (isSway ? '#4f9cb0' : '#4f8f38');
+  g.strokeStyle = isSpring ? '#3d7f30' : (isSway ? '#4f9cb0' : (isBrick ? '#5d8a45' : '#4f8f38'));
   g.lineWidth = 2;
   g.lineCap = 'round';
   for (let i = 0; i < 3; i++) {
@@ -1984,7 +2053,7 @@ function buildPlatformSprite(kind, bucket, columnH) {
 function getPlatformSprite(p) {
   const columnH = Math.ceil(H - topY() + 18);
   const bucket = Math.max(24, Math.round(p.w / PLAT_BUCKET) * PLAT_BUCKET);
-  const kind = p.spring ? 'spring' : (p.sway ? 'sway' : 'wood');
+  const kind = p.spring ? 'spring' : (p.sway ? 'sway' : (p.brick ? 'brick' : 'wood'));
   const key = kind + ':' + bucket + ':' + columnH;
   let sp = platSpriteCache.get(key);
   if (!sp) {
@@ -2066,10 +2135,12 @@ function drawFireflies(now) {
  * ============================================================ */
 function reset() {
   stopChargeSound();
+  // 出生点那根是 0 号（木柱），后面 makePlatform 从 1 号开始排
+  platSeq = 1;
   setRunRng(dailyKey);             // 每日挑战：换种子；普通局：回到 Math.random
   platforms = [];
   const firstW = 112;
-  platforms.push({ x: W * 0.2, baseX: W * 0.2, w: firstW, squash: 0, spring: false, sway: null, sprite: null, spriteH: 0, glow: 0 });
+  platforms.push({ x: W * 0.2, baseX: W * 0.2, w: firstW, squash: 0, spring: false, sway: null, brick: false, sprite: null, spriteH: 0, glow: 0 });
   for (let i = 0; i < 4; i++) platforms.push(makePlatform(platforms[platforms.length - 1]));
 
   player = {

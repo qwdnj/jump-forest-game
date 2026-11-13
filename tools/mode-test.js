@@ -25,6 +25,11 @@ window.__dbg = {
   applyMode: applyMode, applySkin: applySkin, skinById: skinById,
   unlocked: function (id) { return skinUnlocked(skinById(id)); },
   pause: togglePause,
+  bricks: function () {
+    return platforms.map(function (p) {
+      return { brick: !!p.brick, spring: !!p.spring, sway: !!p.sway, w: Math.round(p.w) };
+    });
+  },
   hits: function () { return uiHits.length; },
   click: function (x, y) { onDown({ preventDefault: function () {}, isPrimary: true, clientX: x, clientY: y }); },
   up: function () { onUp({ preventDefault: function () {} }); }
@@ -145,6 +150,30 @@ const label = path.basename(path.dirname(FILE)) + '/' + path.basename(FILE);
   env.pump(2);
   ok(d.snap().best === 33, '切回简单仍是 33', d.snap().best);
   ok(!env.errors.length, '切模式无异常');
+}
+
+/* 3b. 柱子材质：隔一根石砖（弹簧/摆柱不参与轮换） */
+{
+  const env = load(html);
+  const d = env.sandbox.__dbg;
+  const list = d.bricks();
+  ok(list.length >= 5, '开局至少有 5 根柱子', list.length);
+  ok(!list[0].brick, '第一根（出生点）是木柱', list[0]);
+
+  let plainPairs = 0, bad = 0;
+  for (let i = 0; i + 1 < list.length; i++) {
+    const a = list[i], b = list[i + 1];
+    if (a.spring || a.sway || b.spring || b.sway) continue;
+    plainPairs++;
+    if (a.brick === b.brick) bad++;
+  }
+  ok(plainPairs > 0, '开局有相邻的普通柱子', plainPairs);
+  ok(bad === 0, '相邻的普通柱子必须一木一砖', { pairs: plainPairs, bad: bad });
+
+  // 弹簧 / 摆柱 用的是自己的材质，不该被标成石砖
+  const special = list.filter(p => p.spring || p.sway);
+  ok(special.every(p => !p.brick), '弹簧柱 / 摆柱不会被标成石砖', special,);
+  ok(!env.errors.length, '加石砖柱后无异常', env.errors.slice(0, 1).map(e => e.msg));
 }
 
 /* 4. 皮肤：解锁 / 换装 / 锁定 */
