@@ -880,7 +880,15 @@ if (nameInputEl) {
 }
 
 /* ---- 全屏 + 横屏锁定 ---- */
+/* 在 APK 外壳（WebView）里，Fullscreen API 是废的，screen.orientation.lock() 也就跟着
+   永远失败，横屏按钮点了没反应。外壳会注入 window.GameShell，遇到它就把「横屏 + 藏
+   状态栏」整个交给原生 Activity 去做；浏览器里还是走原来的全屏 API。 */
+const shell = (typeof window !== "undefined" && window.GameShell) || null;
+const shellCanOrient = !!(shell && typeof shell.setGameMode === 'function');
+let shellGameMode = false;
+
 function isFullscreen() {
+  if (shellCanOrient) return shellGameMode;
   return !!(document.fullscreenElement || document.webkitFullscreenElement);
 }
 
@@ -893,6 +901,14 @@ function lockLandscape() {
 }
 
 function toggleFullscreen() {
+  // 外壳里：真正的横屏
+  if (shellCanOrient) {
+    shellGameMode = !shellGameMode;
+    try { shell.setGameMode(shellGameMode); } catch (e) { shellGameMode = false; }
+    scheduleResize();     // 转屏后窗口尺寸会变，先自己重排一次，不等 resize 事件
+    beep(shellGameMode ? 720 : 520, 0.08, 'sine', 0.10);
+    return;
+  }
   if (isFullscreen()) {
     try {
       if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();

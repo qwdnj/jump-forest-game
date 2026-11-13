@@ -20,6 +20,7 @@
 - 落点预览按「落地那一刻」的位置算，所以预览不会骗人
 - 难度分两段收紧：30 分前快速收紧，30~150 分继续慢慢变难
 - 天色随分数推进：白天 → 黄昏；分数越高星星越亮
+- 右上角「全屏」按钮：浏览器里是 Fullscreen API，APK 里由外壳真正切横屏
 
 ## 海滩猴子大冒险
 
@@ -45,7 +46,32 @@ APK 里的网页和线上版本是同一份源码，改了网页重新构建就�
 
 构建时会先跑 `node tools/check-assets.js`：检查 assets 里所有页面引用的本地链接都落在真实文件上。
 
-### 这个壳都做了什么（v1.1.0）
+### 选单页滚动（v1.1.1）
+
+之前 `body` 被写死成 `height:100%`，它就是个定高的 flex 容器，
+两张游戏卡片作为列方向的 flex item 会被 `flex-shrink` 压扁，
+再撞上 `.card` 的 `overflow:hidden`，卡片底部的「开始玩」直接被裁掉；
+页面刚好不溢出，所以怎么上滑都滚不动。现在 `body` 只给 `min-height`，
+卡片 `flex:none`，内容多高就多高，滚动交还给文档。
+
+### 横屏（v1.1.1）
+
+跳一跳的「全屏」按钮原本只做两件事：`requestFullscreen()` 然后
+`screen.orientation.lock("landscape")`。这两样在 WebView 里都不可用
+（外壳没实现 `onShowCustomView`，锁方向还要求先真的进了全屏），
+所以装进 APK 之后横屏永远是死的。
+
+现在外壳用 `addJavascriptInterface` 注入了一个 `window.GameShell`：
+
+| 页面 | 原生 |
+| --- | --- |
+| `GameShell.setGameMode(true)` | `SCREEN_ORIENTATION_SENSOR_LANDSCAPE` + 藏起状态栏/导航栏 |
+| `GameShell.setGameMode(false)` | 还原成 `SCREEN_ORIENTATION_UNSPECIFIED`（跟随重力感应） |
+
+页面上检测到 `GameShell` 就走这条路，检测不到（普通浏览器 / 线上版）还是原来的
+全屏 API。回到选单（`onPageStarted` 命中 `index.html`，或选单页自己调一次）会把方向还回去。
+
+### 这个壳都做了什么（v1.1.1）
 
 | | |
 | --- | --- |
@@ -54,6 +80,8 @@ APK 里的网页和线上版本是同一份源码，改了网页重新构建就�
 | 切后台 | `onPause` 交给 WebView，页面自己再 `visibilitychange` 暂停，回来是暂停面板 |
 | 崩溃 | 渲染进程被系统回收时 `onRenderProcessGone` 重建 WebView，不会连带整个 App 闪退 |
 | 误触 | 关掉长按选择/保存图片、双击缩放、下拉回弹 |
+| 横屏 | 跳一跳点「全屏」→ 原生真的转横屏 + 沉浸式；回选单自动还原 |
+| 选单 | 页面可以正常上下滑动，卡片不再被压扁（v1.1.1） |
 | 出错 | `onReceivedError` 给一张能「重新加载」的错误页 |
 | 音量 | `setVolumeControlStream(STREAM_MUSIC)`，音量键调的是游戏音效 |
 | 安全 | 关闭 `setWebContentsDebuggingEnabled`、跨文件访问、混合内容、明文流量(cleartext) |

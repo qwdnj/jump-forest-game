@@ -10,7 +10,12 @@
     --bg0:#0f1f18; --bg1:#16302a; --fg:#f3f7f2; --dim:rgba(243,247,242,.62);
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-  html,body{height:100%}
+  /* 别再给 body 写 height:100%：那样 body 就是「定高」的 flex 容器，
+     两张卡片作为列方向的 flex item 会被 flex-shrink 压扁，
+     再撞上 .card 的 overflow:hidden，菜单最下面的「开始玩」直接被裁掉；
+     页面又刚好不溢出，于是怎么上滑都滚不动。
+     现在 body 只给 min-height，内容多高它就多高，滚动交还给文档。 */
+  html{height:100%}
   body{
     background:
       radial-gradient(120% 70% at 50% -10%, #1d4437 0%, transparent 60%),
@@ -18,19 +23,22 @@
       linear-gradient(180deg, var(--bg0), var(--bg1));
     color:var(--fg);
     font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+    min-height:100%;
     min-height:100dvh;
     display:flex; justify-content:center;
     padding:calc(22px + env(safe-area-inset-top)) 16px calc(20px + env(safe-area-inset-bottom));
     -webkit-font-smoothing:antialiased;
   }
-  main{width:100%;max-width:460px;display:flex;flex-direction:column;gap:14px}
+  /* flex:0 0 auto + 子项 flex:none：内容说了算，不许被压扁 */
+  main{flex:0 0 auto;width:100%;max-width:460px;display:flex;flex-direction:column;gap:14px}
 
-  header{padding:6px 4px 10px}
+  header{flex:none;padding:6px 4px 10px}
   h1{font-size:25px;letter-spacing:.5px;font-weight:800}
   h1 span{color:#7ee9a8}
   .sub{margin-top:6px;font-size:13px;color:var(--dim);line-height:1.5}
 
   .card{
+    flex:none;
     display:block;text-decoration:none;color:inherit;
     border-radius:20px;overflow:hidden;position:relative;
     background:rgba(255,255,255,.045);
@@ -58,7 +66,7 @@
     background:linear-gradient(180deg,#8ff0b4,#4fd07f);
     padding:7px 14px;border-radius:999px;
   }
-  footer{margin-top:6px;text-align:center;font-size:11.5px;color:rgba(243,247,242,.4);line-height:1.7;padding-bottom:6px}
+  footer{flex:none;margin-top:6px;text-align:center;font-size:11.5px;color:rgba(243,247,242,.4);line-height:1.7;padding-bottom:6px}
   .apk{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:9px 18px;border-radius:999px;
     font-size:12.5px;font-weight:700;color:#d8f5e4;text-decoration:none;
     background:rgba(255,255,255,.07);border:1px solid rgba(126,233,168,.35)}
@@ -180,6 +188,10 @@
    网页版（GitHub Pages）保持原样。 */
 (function () {
   if (location.protocol !== 'file:') return;
+  // 从游戏退回选单时，把外壳（APK）的横屏还回去，别让菜单横着
+  if (window.GameShell && typeof window.GameShell.setGameMode === 'function') {
+    try { window.GameShell.setGameMode(false); } catch (e) {}
+  }
   var btn = document.querySelector('.apk');
   if (btn) btn.style.display = 'none';
   var foot = document.querySelector('footer');

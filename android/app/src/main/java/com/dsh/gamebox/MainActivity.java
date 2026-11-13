@@ -4,7 +4,9 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
@@ -16,6 +18,7 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -66,6 +69,7 @@ public class MainActivity extends Activity {
     private TextView errorTip;
     private TextView retry;
 
+    private boolean gameMode;     // 网页要了横屏/沉浸（跳一跳的「全屏」按钮）
     private boolean ready;        // 首屏画出来了没
     private boolean failed;       // 加载失败了
     private long bootAt;          // 冷启动时刻，用来记「多久能玩」
@@ -140,6 +144,9 @@ public class MainActivity extends Activity {
         s.setBuiltInZoomControls(false);
         s.setDisplayZoomControls(false);
 
+        // 网页里的 window.GameShell：WebView 自己切不了方向，得让原生代劳
+        web.addJavascriptInterface(new ShellBridge(), "GameShell");
+
         web.setWebViewClient(new GameClient());
         web.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -164,6 +171,12 @@ public class MainActivity extends Activity {
     }
 
     private final class GameClient extends WebViewClient {
+
+        @Override
+        public void onPageStarted(WebView view, String url, Bitmap favicon) {
+            // 回到选单就把横屏/全屏还回去，别让菜单也跟着横着
+            if (gameMode && (url == null || url.equals(HOME))) setGameMode(false);
+        }
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -212,6 +225,64 @@ public class MainActivity extends Activity {
             showSplash();
             createWebView();
             return true;
+        }
+    }
+
+    /* ---------------------------------------------------------------
+     *  网页 → 原生：横屏 / 沉浸式
+     *
+     *  为什么不让网页自己切：外壳里跑的是 WebView，不支持 Fullscreen API，
+     *  requestFullscreen() 点了没反应；而 screen.orientation.lock() 规定必须先
+     *  全屏成功才允许调用，于是跳一跳右上角那个「全屏」按钮在 APK 里是死的，
+     *  横屏永远切不过去。改成页面喊一声、原生真的去转屏。
+     * --------------------------------------------------------------- */
+
+    /** 网页里的 window.GameShell：目前只负责横屏/全屏 */
+    private final class ShellBridge {
+
+        @JavascriptInterface
+        public void setGameMode(final boolean on) {
+            // JS 桥回调在 JavaBridge 线程上，碰 UI 必须回主线程
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (isFinishing() || isDestroyed()) return;
+                    MainActivity.this.setGameMode(on);
+                }
+            });
+        }
+    }
+
+    /**
+     * @param on true = 横屏 + 藏起状态栏/导航栏；false = 交给系统（跟随重力感应）
+     */
+    private void setGameMode(boolean on) {
+        gameMode = on;
+        try {
+            setRequestedOrientation(on
+                    ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        } catch (Throwable t) {
+            // 个别 ROM 会拦，拦了也不该崩
+            Log.w(TAG, "切换屏幕方向失败", t);
+        }
+        applyImmersive(on);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applyImmersive(boolean on) {
+        View decor = getWindow().getDecorView();
+        if (on) {
+            // API 30+ 这几个 flag 被标了 deprecated 但依然生效；
+            // 这个壳没有 AndroidX，就不为它去引依赖了。
+            decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        } else {
+            decor.setSystemUiVisibility(0);
         }
     }
 
