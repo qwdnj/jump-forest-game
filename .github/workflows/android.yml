@@ -49,6 +49,9 @@ jobs:
       - name: 帧率显示回归测试
         run: node tools/perf-test.js android/app/src/main/assets/jump/index.html android/app/src/main/assets/monkey/index.html
 
+      - name: 勋章系统回归测试
+        run: node tools/medal-test.js android/app/src/main/assets/jump/index.html
+
       - name: 编译 debug APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
@@ -74,6 +77,15 @@ jobs:
           body: |
             自动构建的安装包，内含《跳一跳 · 森林》和《海滩猴子大冒险》。
 
+            v1.5.0：跳一跳加入**勋章系统**。每局结束按分数评一枚**本局勋章**
+            （铜 / 银 / 金 / 铂金 / 钻石，简单和困难两套门槛，困难门槛更低），
+            结算页挂出本局勋章并告诉你「距下一枚还差几分」；等级章是阶梯，
+            拿到钻石下面几级一起点亮。另有 4 枚**特别勋章**：
+            完美主义者（单局 12 跳且完美率 ≥60%）、弹簧收藏家（单局 5 个弹簧柱）、
+            每日勇者（每日挑战拿金章）、双面高手（简单和困难都拿过金章）。
+            设置页新增「勋章」入口（和每日挑战 / 成就并排），里面有勋章墙：
+            五枚等级章一行排开，四枚特别章两列卡片，点亮的显示日期。
+            HUD 的「最高」前面会挂当前模式的历史最高勋章，右下角还有新章提示条。
             v1.4.1：海滩猴子大冒险的猴子补了一身**毛发细节** —— 头顶一圈短毛边、
             脸颊绒、耳廓毛、身体下沿毛边、身侧软毛、额头碎毛、尾巴尖炸毛；
             跳一跳的柱子改成**隔一根石砖柱**（错缝砖、灰缝、坑洼、砖缝苔藓、石板盖板），

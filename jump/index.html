@@ -1669,6 +1669,201 @@ function drawToast(now) {
 }
 
 /* ============================================================
+ *  9d. 勋章
+ *  跟成就的分工：
+ *    成就 = 一次性小目标，做完就完；
+ *    勋章 = 每局结算的「评级」（铜 → 钻石）+ 几枚跨局特别章，
+ *           勋章墙上一眼看出自己打到哪一级。
+ * ============================================================ */
+const MEDAL_KEY = 'jf_medals_v1';
+
+/* 等级勋章：单局达到该分数。
+   困难模式平台更窄、没有落点预览，所以门槛压低一些，两级难度拿章难度接近。 */
+const MEDALS = [
+  { id: 'bronze',   name: '铜章',   light: '#f0b68a', dark: '#8b5a34', star: '#fff1e2' },
+  { id: 'silver',   name: '银章',   light: '#e6ebf2', dark: '#7d8794', star: '#ffffff' },
+  { id: 'gold',     name: '金章',   light: '#ffe27a', dark: '#b8862a', star: '#fffbe0' },
+  { id: 'platinum', name: '铂金章', light: '#c8f3f6', dark: '#4f9ea8', star: '#ffffff' },
+  { id: 'diamond',  name: '钻石章', light: '#d9d0ff', dark: '#5f4fb8', star: '#ffffff' }
+];
+const MEDAL_NEED = {
+  easy: [10, 25, 45, 80, 120],
+  hard: [6, 15, 30, 55, 90]
+};
+
+/* 特别勋章：条件跟成就刻意错开，避免「同一件事亮两次」 */
+const SPECIAL_MEDALS = [
+  {
+    id: 'perfect_run', name: '完美主义者', desc: '单局 12 跳且完美率 ≥60%',
+    test: function () { return jumpCount >= 12 && perfectCount / jumpCount >= 0.6; }
+  },
+  {
+    id: 'spring5', name: '弹簧收藏家', desc: '单局踩中 5 个弹簧柱',
+    test: function () { return springCount >= 5; }
+  },
+  {
+    id: 'daily_gold', name: '每日勇者', desc: '每日挑战单局拿到金章',
+    test: function () { return !!dailyKey && runMedalGrade() >= 3; }
+  },
+  {
+    id: 'both_gold', name: '双面高手', desc: '简单和困难都拿到过金章',
+    test: function () { return medalState.best.easy >= 3 && medalState.best.hard >= 3; }
+  }
+];
+
+const medalState = { best: { easy: 0, hard: 0 }, grades: {}, special: {} };
+let medalOpen = false;
+let lastRunMedal = 0;      // 本局拿到的等级（0 = 没拿到）
+let lastMedalNew = [];     // 本局新点亮的勋章
+
+function medalToday() {
+  const d = new Date();
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+function loadMedals() {
+  try {
+    const s = JSON.parse(localStorage.getItem(MEDAL_KEY) || 'null');
+    if (!s) return;
+    if (s.best) {
+      medalState.best.easy = clamp(parseInt(s.best.easy, 10) || 0, 0, MEDALS.length);
+      medalState.best.hard = clamp(parseInt(s.best.hard, 10) || 0, 0, MEDALS.length);
+    }
+    if (s.grades) for (const key in s.grades) if (s.grades[key]) medalState.grades[key] = s.grades[key];
+    if (s.special) for (const key in s.special) if (s.special[key]) medalState.special[key] = s.special[key];
+  } catch (e) {}
+}
+
+function saveMedals() {
+  try { localStorage.setItem(MEDAL_KEY, JSON.stringify(medalState)); } catch (e) {}
+}
+
+/* 本局评级：按当前模式的分数线算 0~5 */
+function runMedalGrade() {
+  const need = MEDAL_NEED[modeKey] || MEDAL_NEED.easy;
+  let g = 0;
+  for (let i = 0; i < need.length; i++) if (score >= need[i]) g = i + 1;
+  return g;
+}
+
+/* 当前模式下第 grade 级要多少分（grade 从 1 开始；越界时返回最后一档） */
+function medalNeedOf(grade) {
+  const need = MEDAL_NEED[modeKey] || MEDAL_NEED.easy;
+  const i = clamp(grade, 1, need.length) - 1;
+  return need[i];
+}
+
+function medalCount() {
+  let n = 0;
+  for (let i = 0; i < MEDALS.length; i++) if (medalState.grades[MEDALS[i].id]) n++;
+  for (let i = 0; i < SPECIAL_MEDALS.length; i++) if (medalState.special[SPECIAL_MEDALS[i].id]) n++;
+  return n;
+}
+function medalTotal() { return MEDALS.length + SPECIAL_MEDALS.length; }
+
+/* 结算：算本局等级 + 点亮新勋章。等级是阶梯，拿到钻石下面几级也一并点亮。 */
+function awardMedals() {
+  const grade = runMedalGrade();
+  lastRunMedal = grade;
+  const fresh = [];
+
+  for (let i = 0; i < grade; i++) {
+    const m = MEDALS[i];
+    if (!medalState.grades[m.id]) {
+      medalState.grades[m.id] = medalToday();
+      fresh.push(m);
+    }
+  }
+  if (grade > (medalState.best[modeKey] || 0)) medalState.best[modeKey] = grade;
+
+  for (let i = 0; i < SPECIAL_MEDALS.length; i++) {
+    const sm = SPECIAL_MEDALS[i];
+    if (medalState.special[sm.id]) continue;
+    let ok = false;
+    try { ok = !!sm.test(); } catch (e) { ok = false; }
+    if (!ok) continue;
+    medalState.special[sm.id] = medalToday();
+    fresh.push(sm);
+  }
+
+  lastMedalNew = fresh;
+  if (fresh.length) {
+    saveMedals();
+    toast('勋章点亮 · ' + fresh[0].name,
+      fresh.length > 1 ? '一口气点亮了 ' + fresh.length + ' 枚' : '已经挂进勋章墙');
+    vibrate([12, 40, 22]);
+    beep(1200, 0.10, 'sine', 0.10);
+    beep(1800, 0.18, 'sine', 0.08, null, 0.10);
+  } else if (grade > 0) {
+    saveMedals();
+  }
+  return grade;
+}
+
+/* 勋章图标：缎带 + 圆盘 + 五角星。lit = false 时画成灰色剪影 */
+function drawMedalIcon(cx, cy, r, m, lit) {
+  const lc = lit ? m.light : '#7d8a80';
+  const dc = lit ? m.dark : '#3f4d45';
+
+  // 缎带
+  ctx.fillStyle = dc;
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.56, cy - r * 0.40);
+  ctx.lineTo(cx - r * 0.92, cy - r * 1.62);
+  ctx.lineTo(cx - r * 0.28, cy - r * 1.34);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + r * 0.56, cy - r * 0.40);
+  ctx.lineTo(cx + r * 0.92, cy - r * 1.62);
+  ctx.lineTo(cx + r * 0.28, cy - r * 1.34);
+  ctx.closePath();
+  ctx.fill();
+
+  // 圆盘
+  const g = ctx.createRadialGradient(cx - r * 0.34, cy - r * 0.38, r * 0.1, cx, cy, r);
+  g.addColorStop(0, lc);
+  g.addColorStop(1, dc);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, SKIN_TAU);
+  ctx.fill();
+  ctx.strokeStyle = lit ? 'rgba(255,255,255,0.60)' : 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = Math.max(1, r * 0.1);
+  ctx.stroke();
+
+  // 内圈
+  ctx.strokeStyle = 'rgba(255,255,255,0.26)';
+  ctx.lineWidth = Math.max(0.8, r * 0.06);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.74, 0, SKIN_TAU);
+  ctx.stroke();
+
+  // 五角星
+  ctx.beginPath();
+  for (let p = 0; p < 10; p++) {
+    const ang = -Math.PI / 2 + p * Math.PI / 5;
+    const rad = p % 2 === 0 ? r * 0.48 : r * 0.21;
+    const px = cx + Math.cos(ang) * rad;
+    const py = cy + Math.sin(ang) * rad;
+    if (p === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = lit ? m.star : '#59675e';
+  ctx.fill();
+
+  if (lit) {
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(cx - r * 0.32, cy - r * 0.44, r * 0.32, r * 0.16, -0.6, 0, SKIN_TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* ============================================================
  *  10. 平台
  * ============================================================ */
 const PLAT_PAD = 14;          // 贴图左右留白
@@ -2175,6 +2370,9 @@ function reset() {
   boardOpen = false;
   settingsOpen = false;
   achOpen = false;
+  medalOpen = false;
+  lastRunMedal = 0;
+  lastMedalNew = [];
   pauseSnap = null;             // 新的一局，暂停快照作废
   lastRank = 0;
   particles = []; popups = []; rings = []; trail = [];
@@ -2282,6 +2480,7 @@ function onDown(e) {
   if (settingsOpen) { settingsOpen = false; return; }   // 点空白处关掉设置
   if (boardOpen) { boardOpen = false; return; }         // 点空白处关闭排行榜
   if (achOpen) { achOpen = false; settingsOpen = true; return; }  // 成就面板：点空白退回设置
+  if (medalOpen) { medalOpen = false; settingsOpen = true; return; }  // 勋章墙同理
 
   const mb = getMuteBtn();
   if (hitCircle(x, y, mb.x, mb.y, mb.r)) {
@@ -2642,6 +2841,7 @@ function gameOver() {
   }
   saveStats();
   checkAch();
+  awardMedals();      // 本局评级 + 点亮新勋章（提示条在函数里弹）
 
   spawnPopup(camX + W / 2, H * 0.36, '失足...', '#ff9b7a', 24);
   vibrate([30, 60, 40]);
@@ -4131,7 +4331,7 @@ function drawBoard() {
    数字用平滑值，且等宽对齐，60 → 59 的时候数字不会左右跳。 */
 function drawFpsChip() {
   if (!fpsMode) return;
-  if (settingsOpen || boardOpen || achOpen) return;   // 面板开着就别挡视线
+  if (settingsOpen || boardOpen || achOpen || medalOpen) return;   // 面板开着就别挡视线
   const k = uiScale();
   const fb = getFullscreenBtn();
   const fs = (isLandscape() ? 10 : 11) * k;
@@ -4208,20 +4408,29 @@ function drawUI(now) {
   const subX = (land ? 24 : 28) * k;
   const subY = uiTop + scoreSize * 0.99 + (land ? 4 : 6) * k;
 
+  // 这个模式的历史最高勋章，挂在「最高」前面（没拿到就不占位置）
+  let bestX = subX;
+  const bestGrade = medalState.best[modeKey] || 0;
+  if (bestGrade > 0) {
+    drawMedalIcon(subX + subSize * 0.62, subY + subSize * 0.76, subSize * 0.52,
+                  MEDALS[bestGrade - 1], true);
+    bestX = subX + subSize * 1.46;
+  }
+
   const bestTxt = '最高 ' + best;
   ctx.font = fontOf(subSize);
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(24, 58, 34, 0.34)';
-  ctx.strokeText(bestTxt, subX, subY);
+  ctx.strokeText(bestTxt, bestX, subY);
   ctx.fillStyle = 'rgba(255,255,255,0.86)';
-  ctx.fillText(bestTxt, subX, subY);
+  ctx.fillText(bestTxt, bestX, subY);
 
   // 难度徽标：跟着「最高」后面，一眼看出这局是哪个模式
   {
     const M = MODE();
     const chipH = subSize * 1.22;
     const chipY = subY + subSize * 0.06;
-    const chipX = subX + ctx.measureText(bestTxt).width + 8 * k;
+    const chipX = bestX + ctx.measureText(bestTxt).width + 8 * k;
     const chipTxt = dailyKey ? '每日 · ' + M.name : M.name;
     ctx.font = fontOf(subSize * 0.82, 'bold');
     const chipW = ctx.measureText(chipTxt).width + 15 * k;
@@ -4446,7 +4655,7 @@ function drawOver() {
   ctx.fillRect(0, 0, W, H);
 
   const cw = Math.min(W * 0.84, 340 * k);
-  const ch = Math.min(H * 0.78, (land ? 320 : 392) * k);
+  const ch = Math.min(H * 0.80, (land ? 336 : 414) * k);
   const cx = W / 2 - cw / 2;
   const cy = H / 2 - ch / 2 + (1 - ease) * 14;
 
@@ -4481,29 +4690,60 @@ function drawOver() {
   // 分数
   ctx.fillStyle = '#ffffff';
   ctx.font = fontOf(Math.min(cw * 0.30, 66 * k), 'bold');
-  ctx.fillText(String(score), W / 2, cy + ch * 0.30);
+  ctx.fillText(String(score), W / 2, cy + ch * 0.295);
+
+  /* 本局勋章：拿到了就挂一枚大的，没拿到就报「还差几分」 —— 
+     结算页最该回答的两个问题：这局打得怎么样、下一枚还差多少。 */
+  {
+    const my = cy + ch * 0.425;
+    const gm = lastRunMedal > 0 ? MEDALS[lastRunMedal - 1] : null;
+    if (gm) {
+      const mr = 15 * k;
+      const tx = W / 2 - 52 * k + mr * 1.06 + 8 * k;
+      drawMedalIcon(W / 2 - 52 * k, my, mr, gm, true);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffe9a8';
+      ctx.font = fontOf(14 * k, 'bold');
+      ctx.fillText('本局勋章 · ' + gm.name, tx, my - 4 * k);
+
+      const nextNeed = lastRunMedal < MEDALS.length ? medalNeedOf(lastRunMedal + 1) : 0;
+      ctx.fillStyle = lastMedalNew.length ? '#9ef07a' : 'rgba(255,255,255,0.45)';
+      ctx.font = fontOf(9.5 * k, lastMedalNew.length ? 'bold' : '');
+      ctx.fillText(
+        lastMedalNew.length
+          ? '新点亮 ' + lastMedalNew.length + ' 枚 · 设置 → 勋章 查看'
+          : (nextNeed ? '距 ' + MEDALS[lastRunMedal].name + ' 还差 ' + Math.max(0, nextNeed - score) + ' 分' : '已是最高等级'),
+        tx, my + 13 * k
+      );
+      ctx.textAlign = 'center';
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = fontOf(10.5 * k);
+      ctx.fillText('本局没有勋章 · 铜章要 ' + medalNeedOf(1) + ' 分', W / 2, my);
+    }
+  }
 
   // 最高分 + 本局名次
   ctx.fillStyle = 'rgba(255,255,255,0.60)';
   ctx.font = fontOf(12 * k);
   ctx.fillText(
     (MODE().name + ' · ') + (lastRank > 0 ? '最高分 ' + best + '   ·   第 ' + lastRank + ' 名' : '最高分  ' + best),
-    W / 2, cy + ch * 0.43
+    W / 2, cy + ch * 0.487
   );
 
   // 差多少分破纪录，比只报一个最高分更能推人再来一局
   if (best > score) {
     ctx.fillStyle = 'rgba(255,255,255,0.40)';
     ctx.font = fontOf(10.5 * k);
-    ctx.fillText('距离最高分还差 ' + (best - score) + ' 分', W / 2, cy + ch * 0.472);
+    ctx.fillText('距离最高分还差 ' + (best - score) + ' 分', W / 2, cy + ch * 0.522);
   }
 
   // 分隔线
   ctx.strokeStyle = 'rgba(255,255,255,0.12)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(cx + cw * 0.12, cy + ch * 0.50);
-  ctx.lineTo(cx + cw * 0.88, cy + ch * 0.50);
+  ctx.moveTo(cx + cw * 0.12, cy + ch * 0.548);
+  ctx.lineTo(cx + cw * 0.88, cy + ch * 0.548);
   ctx.stroke();
 
   // 统计三列
@@ -4517,15 +4757,15 @@ function drawOver() {
     const sx = cx + colW * (i + 0.5);
     ctx.fillStyle = '#ffffff';
     ctx.font = fontOf(15 * k, 'bold');
-    ctx.fillText(stats[i][1], sx, cy + ch * 0.585);
+    ctx.fillText(stats[i][1], sx, cy + ch * 0.625);
     ctx.fillStyle = 'rgba(255,255,255,0.52)';
     ctx.font = fontOf(10.5 * k);
-    ctx.fillText(stats[i][0], sx, cy + ch * 0.675);
+    ctx.fillText(stats[i][0], sx, cy + ch * 0.705);
   }
 
   // 按钮：再来一次 + 排行榜 + 设置
   const bh = (land ? 44 : 50) * k;
-  const by = cy + ch * 0.775;
+  const by = cy + ch * 0.795;
   const gap = 9 * k;
   const bw1 = Math.min(cw * 0.42, 132 * k);
   const bw2 = Math.min(cw * 0.28, 92 * k);
@@ -4856,24 +5096,32 @@ function drawSettings() {
                cx + padX, y);
   y += (land ? 20 : 24) * k;
 
-  /* ---------------- 每日挑战 / 成就 ---------------- */
+  /* ---------------- 每日挑战 / 成就 / 勋章 ---------------- */
   {
-    const rw = (cw - padX * 2 - gap) / 2;
+    const rw = (cw - padX * 2 - gap * 2) / 3;
     const rh = (land ? 34 : 38) * k;
     const ry = y;
     const onDaily = !!dailyKey;
     drawPill(cx + padX, ry, rw, rh,
       onDaily ? 'rgba(255,217,59,0.92)' : 'rgba(255,217,59,0.22)',
       onDaily ? 'rgba(214,154,18,0.92)' : 'rgba(255,217,59,0.12)',
-      onDaily ? '重开今日挑战' : '每日挑战', 12.5 * k);
+      onDaily ? '重开今日' : '每日挑战', 12 * k);
     addHit(cx + padX, ry, rw, rh, function () { startDaily(); });
 
     drawPill(cx + padX + rw + gap, ry, rw, rh,
       'rgba(255,255,255,0.24)', 'rgba(255,255,255,0.12)',
-      '成就 ' + achCount() + '/' + ACHS.length, 12.5 * k);
+      '成就 ' + achCount() + '/' + ACHS.length, 12 * k);
     addHit(cx + padX + rw + gap, ry, rw, rh, function () {
       settingsOpen = false;
       achOpen = true;
+    });
+
+    drawPill(cx + padX + (rw + gap) * 2, ry, rw, rh,
+      'rgba(255,217,59,0.20)', 'rgba(255,217,59,0.10)',
+      '勋章 ' + medalCount() + '/' + medalTotal(), 12 * k);
+    addHit(cx + padX + (rw + gap) * 2, ry, rw, rh, function () {
+      settingsOpen = false;
+      medalOpen = true;
     });
 
     ctx.textAlign = 'left';
@@ -5078,7 +5326,167 @@ function drawAch() {
   });
 }
 
+/* ============================================================
+ *  19d. 勋章墙
+ *  上半是 5 枚等级章（单局评级，一行排开），下半是 4 枚特别章（两列卡片）。
+ * ============================================================ */
+function drawMedals() {
+  const land = isLandscape();
+  const k = uiScale();
+
+  ctx.fillStyle = 'rgba(8, 22, 14, 0.84)';
+  ctx.fillRect(0, 0, W, H);
+
+  const cw = Math.min(W * 0.94, (land ? 500 : 354) * k);
+  const padX = 16 * k;
+  const gap = 8 * k;
+  const headH = (land ? 42 : 50) * k;
+  const secH = (land ? 20 : 24) * k;
+  const gradeH = (land ? 66 : 80) * k;
+  const cardH = (land ? 48 : 56) * k;
+  const footH = (land ? 44 : 50) * k;
+  const ch = Math.min(H * 0.94, headH + secH + gradeH + secH + cardH * 2 + gap + footH + 12 * k);
+  const cx = W / 2 - cw / 2;
+  const cy = H / 2 - ch / 2;
+
+  const pg = ctx.createLinearGradient(0, cy, 0, cy + ch);
+  pg.addColorStop(0, 'rgba(40, 78, 52, 0.98)');
+  pg.addColorStop(1, 'rgba(20, 46, 30, 0.98)');
+  ctx.fillStyle = pg;
+  rr(ctx, cx, cy, cw, ch, 20 * k);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  addHit(cx, cy, cw, ch, function () {});
+
+  // 标题 + 进度
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = fontOf((land ? 15 : 17) * k, 'bold');
+  ctx.fillText('勋章', cx + padX, cy + 26 * k);
+
+  const got = medalCount(), all = medalTotal();
+  ctx.textAlign = 'right';
+  ctx.fillStyle = got >= all ? '#ffd93b' : 'rgba(255,255,255,0.52)';
+  ctx.font = fontOf(11 * k, 'bold');
+  ctx.fillText('已点亮 ' + got + ' / ' + all, cx + cw - padX - 32 * k, cy + 26 * k);
+
+  // 关闭
+  const closeR = 12 * k;
+  const ccx = cx + cw - padX + 1 * k;
+  const ccy = cy + 26 * k;
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  ctx.arc(ccx, ccy, closeR, 0, SKIN_TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(1.4, 1.8 * k);
+  ctx.lineCap = 'round';
+  const xr = closeR * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(ccx - xr, ccy - xr); ctx.lineTo(ccx + xr, ccy + xr);
+  ctx.moveTo(ccx + xr, ccy - xr); ctx.lineTo(ccx - xr, ccy + xr);
+  ctx.stroke();
+  addHit(ccx - closeR - 8, ccy - closeR - 8, (closeR + 8) * 2, (closeR + 8) * 2, function () {
+    medalOpen = false;
+    settingsOpen = true;
+  });
+
+  let y = cy + headH;
+
+  /* ---------------- 等级勋章 ---------------- */
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = fontOf(11 * k, 'bold');
+  ctx.fillText('等级勋章 · 单局评级', cx + padX, y + secH * 0.34);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.32)';
+  ctx.font = fontOf(9.5 * k);
+  const needs = MEDAL_NEED[modeKey] || MEDAL_NEED.easy;
+  ctx.fillText(MODE().name + '：' + needs.join(' / ') + ' 分', cx + cw - padX, y + secH * 0.34);
+  y += secH;
+
+  const cellW = (cw - padX * 2) / MEDALS.length;
+  const iconR = Math.min(cellW * 0.26, (land ? 12 : 14) * k);
+  for (let i = 0; i < MEDALS.length; i++) {
+    const m = MEDALS[i];
+    const lit = !!medalState.grades[m.id];
+    const gx = cx + padX + cellW * (i + 0.5);
+    drawMedalIcon(gx, y + gradeH * 0.40, iconR, m, lit);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = lit ? '#ffe57a' : 'rgba(255,255,255,0.42)';
+    ctx.font = fontOf((land ? 9.5 : 10.5) * k, 'bold');
+    ctx.fillText(m.name, gx, y + gradeH * 0.78);
+
+    ctx.fillStyle = lit ? 'rgba(255,255,255,0.52)' : 'rgba(255,255,255,0.26)';
+    ctx.font = fontOf(8.5 * k);
+    ctx.fillText(lit ? (medalState.grades[m.id] || '').slice(5) : needs[i] + ' 分', gx, y + gradeH * 0.94);
+  }
+  y += gradeH;
+
+  /* ---------------- 特别勋章 ---------------- */
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = fontOf(11 * k, 'bold');
+  ctx.fillText('特别勋章', cx + padX, y + secH * 0.34);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.32)';
+  ctx.font = fontOf(9.5 * k);
+  ctx.fillText('打完一局自动结算', cx + cw - padX, y + secH * 0.34);
+  y += secH;
+
+  const cardW = (cw - padX * 2 - gap) / 2;
+  const smR = Math.min(cardW * 0.13, (land ? 11 : 13) * k);
+  const smCols = ['bronze', 'silver', 'gold', 'diamond'];
+  for (let i = 0; i < SPECIAL_MEDALS.length; i++) {
+    const sm = SPECIAL_MEDALS[i];
+    const lit = !!medalState.special[sm.id];
+    const bx = cx + padX + (i % 2) * (cardW + gap);
+    const by = y + Math.floor(i / 2) * (cardH + gap);
+
+    ctx.fillStyle = lit ? 'rgba(255,217,59,0.13)' : 'rgba(255,255,255,0.045)';
+    rr(ctx, bx, by, cardW, cardH, 11 * k);
+    ctx.fill();
+    if (lit) {
+      ctx.strokeStyle = 'rgba(255,217,59,0.55)';
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+    }
+
+    const palette = MEDALS[i % MEDALS.length];
+    drawMedalIcon(bx + 20 * k, by + cardH * 0.44, smR, palette, lit);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = lit ? '#ffe57a' : 'rgba(255,255,255,0.55)';
+    ctx.font = fontOf((land ? 10 : 11) * k, 'bold');
+    ctx.fillText(sm.name, bx + 38 * k, by + cardH * 0.34);
+
+    ctx.fillStyle = lit ? 'rgba(255,255,255,0.60)' : 'rgba(255,255,255,0.30)';
+    ctx.font = fontOf((land ? 8 : 8.8) * k);
+    ctx.fillText(sm.desc, bx + 38 * k, by + cardH * 0.60);
+
+    ctx.fillStyle = lit ? 'rgba(158,240,122,0.80)' : 'rgba(255,255,255,0.24)';
+    ctx.font = fontOf(8 * k);
+    ctx.fillText(lit ? '已点亮 · ' + (medalState.special[sm.id] || '').slice(5) : '未点亮',
+                 bx + 38 * k, by + cardH * 0.83);
+  }
+
+  /* ---------------- 返回 ---------------- */
+  const bw = Math.min(cw * 0.52, 168 * k);
+  const bh = (land ? 32 : 36) * k;
+  const by2 = cy + ch - footH + 2 * k;
+  drawPill(W / 2 - bw / 2, by2, bw, bh, '#63d977', '#38974a', '返回', 13 * k);
+  addHit(W / 2 - bw / 2, by2, bw, bh, function () {
+    medalOpen = false;
+    settingsOpen = true;
+  });
+}
+
 function render(now) {
+
   const ty = topY();
 
   /* 暂停时用上一帧的整屏快照当背景：天空、树林、柱子、粒子都不用再画一遍。
@@ -5089,6 +5497,7 @@ function render(now) {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     clearHits();
     if (achOpen) drawAch();
+    else if (medalOpen) drawMedals();
     else if (settingsOpen) drawSettings();
     else if (boardOpen) drawBoard();
     else drawPaused();
@@ -5139,6 +5548,7 @@ function render(now) {
   clearHits();          // 先清再画：HUD 和面板都能注册可点区域
   drawUI(now);
   if (achOpen) drawAch();
+  else if (medalOpen) drawMedals();
   else if (settingsOpen) drawSettings();
   else if (boardOpen) drawBoard();
   else if (gameState === 'paused') drawPaused();
@@ -5257,6 +5667,7 @@ if (screen.orientation && screen.orientation.addEventListener) {
  * ============================================================ */
 loadAch();           // 成就 / 累计数据 / 每日记录要在第一次 reset 之前读
 loadStats();
+loadMedals();
 loadDailyRecord();
 resizeCanvas();
 buildScene();

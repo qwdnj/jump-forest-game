@@ -10,8 +10,8 @@ android {
         applicationId 'com.dsh.gamebox'
         minSdk 24
         targetSdk 34
-        versionCode 9
-        versionName '1.4.1'
+        versionCode 10
+        versionName '1.5.0'
     }
 
     // 固定签名：密钥库由一次性的 Actions 任务生成，已提交在 android/keystore/。
