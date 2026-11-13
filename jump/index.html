@@ -158,6 +158,7 @@ const SKINS = [
     body: ['#ff9a72', '#ef5f3c'], belly: 'rgba(255,255,255,0.28)',
     band: ['#e8543f', '#ffb3a3'], cheek: 'rgba(255,130,110,0.42)',
     ear: ['#ff9a72', '#ffc9b2'], ears: 'round', pattern: 'belt',
+    face: '#ffd9c0', hat: null,
     eye: '#2b2320', trail: '#ffb08c', glow: null
   },
   {
@@ -165,6 +166,7 @@ const SKINS = [
     body: ['#8ef0c8', '#2fa87e'], belly: 'rgba(255,255,255,0.34)',
     band: ['#2a8f74', '#9ff5d4'], cheek: 'rgba(80,220,180,0.32)',
     ear: ['#8ef0c8', '#dcfff2'], ears: 'leaf', pattern: 'belt',
+    face: '#dbfff2', hat: null,
     eye: '#10382f', trail: '#9ff5d4', glow: null
   },
   {
@@ -172,6 +174,7 @@ const SKINS = [
     body: ['#ffe066', '#f0b400'], belly: 'rgba(255,255,255,0.20)',
     band: ['#33302a', '#57503f'], cheek: 'rgba(255,170,60,0.34)',
     ear: ['#ffe066', '#fff6bd'], ears: 'antenna', pattern: 'stripe',
+    face: '#fff3bd', hat: null,
     eye: '#2b2320', trail: '#ffe066', glow: 'rgba(255,225,90,0.18)'
   },
   {
@@ -179,6 +182,7 @@ const SKINS = [
     body: ['#ffffff', '#c6dff2'], belly: 'rgba(150,200,235,0.30)',
     band: ['#7fbde6', '#e8f6ff'], cheek: 'rgba(255,150,170,0.28)',
     ear: ['#ffffff', '#eef8ff'], ears: 'round', pattern: 'belt',
+    face: '#ffffff', hat: 'beanie',
     eye: '#1e3b4a', trail: '#dbeeff', glow: 'rgba(190,230,255,0.20)'
   },
   {
@@ -186,6 +190,7 @@ const SKINS = [
     body: ['#5f6779', '#282d3b'], belly: 'rgba(255,255,255,0.13)',
     band: ['#d94f4f', '#ff9a9a'], cheek: 'rgba(190,100,100,0.22)',
     ear: ['#4a5163', '#6f7889'], ears: 'round', pattern: 'belt',
+    face: '#98a2b6', hat: 'band',
     eye: '#ffd54f', trail: '#9fb4d8', glow: 'rgba(120,150,200,0.16)'
   },
   {
@@ -193,6 +198,7 @@ const SKINS = [
     body: ['#ffe28a', '#d99a16'], belly: 'rgba(255,255,255,0.32)',
     band: ['#a96b0b', '#fff2b8'], cheek: 'rgba(255,180,60,0.34)',
     ear: ['#ffe28a', '#fff6c8'], ears: 'round', pattern: 'belt',
+    face: '#fff3c8', hat: 'crown',
     eye: '#4a2c05', trail: '#ffe9a8', glow: 'rgba(255,210,80,0.24)'
   }
 ];
@@ -491,6 +497,46 @@ function updatePerf(now, dt) {
   perfSum = 0; perfCount = 0; perfStart = now;
 }
 
+/* ============================================================
+ *  7b. 帧率显示
+ *  fpsMode：0 隐藏 / 1 只显示 FPS / 2 FPS + 单帧耗时(ms)
+ *  点 HUD 右上角的胶囊切换，设置面板里也能开关，选择记在本机。
+ * ============================================================ */
+const FPS_KEY = 'jf_fps_v1';
+let fpsMode = 1;                 // 默认开着：这一版就是把帧率显示出来
+try {
+  const v = parseInt(localStorage.getItem(FPS_KEY), 10);
+  if (v === 0 || v === 1 || v === 2) fpsMode = v;
+} catch (e) {}
+let fpsSmooth = 60, fpsFrameMs = 16.7;
+let fpsShown = 60, fpsMsShown = 16.7, fpsSampleAt = 0;
+
+function setFpsMode(m) {
+  fpsMode = (m === 0 || m === 1 || m === 2) ? m : 1;
+  try { localStorage.setItem(FPS_KEY, String(fpsMode)); } catch (e) {}
+}
+
+/* 用真实帧间隔做两次指数平滑：一次给 FPS，一次给毫秒。
+   用平滑值而不是「这一帧多少」—— 屏幕刷新时掉一帧就跳红字，太神经质。 */
+function sampleFps(now, dt) {
+  if (dt > 0 && dt < 2) {
+    const ms = dt * 1000;
+    fpsFrameMs += (ms - fpsFrameMs) * 0.12;
+    fpsSmooth += (1000 / ms - fpsSmooth) * 0.10;
+  }
+  if (now - fpsSampleAt > 240) {
+    fpsSampleAt = now;
+    fpsShown = Math.round(fpsSmooth);
+    fpsMsShown = fpsFrameMs;
+  }
+}
+
+function fpsColor() {
+  if (fpsShown >= 55) return '#9ef07a';
+  if (fpsShown >= 40) return '#ffd93b';
+  return '#ff8a72';
+}
+
 function particleCap() {
   return perfLevel >= 2 ? 70 : (perfLevel >= 1 ? 150 : 260);
 }
@@ -509,6 +555,7 @@ let treeFar = null, treeMid = null;
 let groundTex = null, glowSprite = null;
 let playerSprite = null, cloudSprite = null;
 let vignette = null, starField = null, fgLayer = null;
+let raySprite = null, shadowSprite = null;
 
 function drawPineOn(g, x, baseY, h, color, trunk) {
   const w = h * 0.52;
@@ -674,13 +721,13 @@ function buildStars() {
   return arr;
 }
 
-/* 角色精灵：按当前皮肤烘焙一张小画布。
-   皮肤只换配色和头上的零件（圆耳朵 / 触角 / 叶子），身体轮廓保持不变，
-   这样跳跃、挤压、旋转的手感对所有皮肤都一样。 */
+/* 角色精灵：头 + 身体 + 五官底盘（瞳孔和四肢每帧画，见 drawHeroLimbs / drawHeroFace）。
+   皮肤只换配色和头顶零件，轮廓保持一致，所以跳跃、挤压、旋转的手感对所有皮肤都一样。
+   画布按 2~3 倍 DPR 烘焙，缩放之后轮廓也不糊。 */
 function buildPlayerSprite() {
   const s = SKIN();
-  const d = Math.min(DPR, 2);
-  const minX = -20, maxX = 20, minY = -52, maxY = 4;
+  const d = Math.max(2, Math.min(3, DPR * 1.6));
+  const minX = -24, maxX = 24, minY = -62, maxY = 2;
   const w = maxX - minX, h = maxY - minY;
   const c = document.createElement('canvas');
   c.width = Math.ceil(w * d);
@@ -688,99 +735,296 @@ function buildPlayerSprite() {
   const g = c.getContext('2d');
   g.scale(d, d);
   g.translate(-minX, -minY);
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
 
-  /* ---- 头顶的零件 ---- */
-  if (s.ears === 'antenna') {
-    // 触角：两根细杆 + 两个小球
-    g.strokeStyle = s.band[0];
-    g.lineWidth = 2.2;
-    g.lineCap = 'round';
+  const light = s.body[0], dark = s.body[1];
+  const face = s.face || '#ffe0c8';
+  const deep = lerpHex(dark, '#000000', 0.42);
+
+  /* ---------- 1. 头后面的零件：耳朵 / 叶子 / 触角 ---------- */
+  if (s.ears === 'round' || s.ears === 'leaf') {
+    const onlyRight = s.ears === 'leaf';   // 叶子皮肤左边换叶子，只留右耳
+    for (let i = onlyRight ? 1 : 0; i < 2; i++) {
+      const ex = (i === 0 ? -1 : 1) * 13.2;
+      g.fillStyle = s.ear[0];
+      g.beginPath();
+      g.ellipse(ex, -41, 5.7, 6.1, 0, 0, SKIN_TAU);
+      g.fill();
+      g.fillStyle = s.ear[1];
+      g.beginPath();
+      g.ellipse(ex, -41, 2.8, 3.2, 0, 0, SKIN_TAU);
+      g.fill();
+      g.strokeStyle = 'rgba(0,0,0,0.12)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.ellipse(ex, -41, 5.4, 5.8, 0, 0, SKIN_TAU);
+      g.stroke();
+    }
+  }
+
+  if (s.ears === 'leaf') {
+    g.fillStyle = s.band[0];
     g.beginPath();
-    g.moveTo(-6, -32); g.lineTo(-9.5, -44.5);
-    g.moveTo(6, -32); g.lineTo(9.5, -44.5);
+    g.moveTo(-4.6, -50);
+    g.quadraticCurveTo(-17.5, -56.5, -9.4, -61);
+    g.quadraticCurveTo(-2, -54.5, -4.6, -50);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.34)';
+    g.beginPath();
+    g.moveTo(-5.4, -51.6);
+    g.quadraticCurveTo(-10.4, -55.6, -8.2, -58.8);
+    g.quadraticCurveTo(-6, -55, -5.4, -51.6);
+    g.fill();
+  }
+
+  if (s.ears === 'antenna') {
+    g.strokeStyle = s.band[0];
+    g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(-6.4, -50);
+    g.quadraticCurveTo(-9.4, -55, -10, -59);
+    g.moveTo(6.4, -50);
+    g.quadraticCurveTo(9.4, -55, 10, -59);
     g.stroke();
     g.fillStyle = s.ear[1];
     g.beginPath();
-    g.arc(-9.5, -45.6, 3.1, 0, SKIN_TAU);
-    g.arc(9.5, -45.6, 3.1, 0, SKIN_TAU);
+    g.arc(-10, -60.6, 3.2, 0, SKIN_TAU);
+    g.arc(10, -60.6, 3.2, 0, SKIN_TAU);
     g.fill();
-  } else if (s.ears === 'leaf') {
-    // 一片小叶子歪在左上角
-    g.fillStyle = s.band[0];
+    g.fillStyle = 'rgba(255,255,255,0.55)';
     g.beginPath();
-    g.moveTo(-7, -33);
-    g.quadraticCurveTo(-16, -40, -8.5, -46.5);
-    g.quadraticCurveTo(-2.5, -40, -7, -33);
-    g.fill();
-    g.fillStyle = 'rgba(255,255,255,0.30)';
-    g.beginPath();
-    g.moveTo(-7, -34.5);
-    g.quadraticCurveTo(-11, -39, -8, -43.5);
-    g.quadraticCurveTo(-6, -39, -7, -34.5);
-    g.fill();
-    g.fillStyle = s.ear[1];
-    g.beginPath();
-    g.arc(8.58, -35, 4.6, 0, SKIN_TAU);
-    g.fill();
-  } else {
-    // 圆耳朵（默认）
-    g.fillStyle = s.ear[0];
-    g.beginPath();
-    g.arc(-8.58, -35, 5.6, 0, SKIN_TAU);
-    g.arc(8.58, -35, 5.6, 0, SKIN_TAU);
-    g.fill();
-    g.fillStyle = s.ear[1];
-    g.beginPath();
-    g.arc(-8.58, -35.5, 2.8, 0, SKIN_TAU);
-    g.arc(8.58, -35.5, 2.8, 0, SKIN_TAU);
+    g.arc(-10.9, -61.4, 1.1, 0, SKIN_TAU);
+    g.arc(9.1, -61.4, 1.1, 0, SKIN_TAU);
     g.fill();
   }
 
-  /* ---- 身体 ---- */
-  const bg = g.createLinearGradient(-13, -34, 13, 0);
-  bg.addColorStop(0, s.body[0]);
-  bg.addColorStop(1, s.body[1]);
+  /* ---------- 2. 身体 ---------- */
+  const bg = g.createLinearGradient(-9, -30, 9, -7);
+  bg.addColorStop(0, lerpHex(light, '#ffffff', 0.18));
+  bg.addColorStop(0.52, light);
+  bg.addColorStop(1, dark);
   g.fillStyle = bg;
-  rr(g, -13, -34, 26, 34, 9);
+  rr(g, -11.8, -30.5, 23.6, 22.5, 9.5);
   g.fill();
 
-  /* ---- 肚子上的亮块 ---- */
+  // 下缘压暗：重心落到脚上
+  g.save();
+  rr(g, -11.8, -30.5, 23.6, 22.5, 9.5);
+  g.clip();
+  const bs = g.createLinearGradient(0, -16, 0, -8);
+  bs.addColorStop(0, 'rgba(0,0,0,0)');
+  bs.addColorStop(1, 'rgba(0,0,0,0.22)');
+  g.fillStyle = bs;
+  g.fillRect(-12, -16, 24, 8.5);
+  g.restore();
+
+  // 肚子亮块
   g.fillStyle = s.belly;
-  rr(g, -9.5, -30.5, 19, 10.88, 6);
+  rr(g, -7.8, -27.8, 15.6, 10.2, 5.1);
   g.fill();
 
+  /* 条纹（小蜜蜂）/ 腰带 */
   if (s.pattern === 'stripe') {
-    // 小蜜蜂的条纹：裁在身体里画，不会溢出轮廓
     g.save();
-    g.beginPath();
-    rr(g, -13, -34, 26, 34, 9);
+    rr(g, -11.8, -30.5, 23.6, 22.5, 9.5);
     g.clip();
     g.fillStyle = s.band[0];
-    g.fillRect(-13, -19, 26, 5);
-    g.fillRect(-13, -8, 26, 5);
-    g.fillStyle = 'rgba(255,255,255,0.16)';
-    g.fillRect(-13, -20.4, 26, 1.4);
-    g.fillRect(-13, -9.4, 26, 1.4);
+    g.fillRect(-12, -20.6, 24, 4.8);
+    g.fillRect(-12, -12.2, 24, 4.8);
+    g.fillStyle = 'rgba(255,255,255,0.18)';
+    g.fillRect(-12, -21.8, 24, 1.3);
+    g.fillRect(-12, -13.4, 24, 1.3);
     g.restore();
   } else {
-    /* ---- 腰带 ---- */
     g.fillStyle = s.band[0];
-    rr(g, -14, -13.6, 28, 6.5, 3.5);
+    rr(g, -12.8, -15, 25.6, 6.4, 3.2);
     g.fill();
     g.fillStyle = s.band[1];
-    rr(g, -14, -13.6, 28, 2, 2);
+    rr(g, -12.8, -15, 25.6, 2.1, 1.6);
+    g.fill();
+    g.fillStyle = lerpHex(s.band[1], '#ffffff', 0.35);
+    rr(g, -2.8, -15.4, 5.6, 6.8, 1.8);
+    g.fill();
+    g.fillStyle = 'rgba(0,0,0,0.16)';
+    rr(g, -1.5, -14, 3, 3.6, 1.2);
     g.fill();
   }
 
-  /* ---- 腮红 ---- */
+  /* ---------- 3. 头 ---------- */
+  const hg = g.createRadialGradient(-5.5, -46, 2, -1, -39, 21);
+  hg.addColorStop(0, lerpHex(light, '#ffffff', 0.36));
+  hg.addColorStop(0.55, light);
+  hg.addColorStop(1, dark);
+  g.fillStyle = hg;
+  g.beginPath();
+  g.arc(0, -39, 14.6, 0, SKIN_TAU);
+  g.fill();
+
+  // 脖子交界处的阴影
+  g.fillStyle = 'rgba(0,0,0,0.10)';
+  g.beginPath();
+  g.ellipse(0, -27.6, 8.4, 2.6, 0, 0, SKIN_TAU);
+  g.fill();
+
+  // 脸盘
+  g.fillStyle = face;
+  g.beginPath();
+  g.ellipse(0, -36.6, 10.9, 9.7, 0, 0, SKIN_TAU);
+  g.fill();
+
+  /* ---------- 4. 五官底盘（瞳孔 / 眨眼每帧画） ----------
+     注意：ellipse() 是接在当前路径后面的，两只眼睛画在同一个 path 里再 stroke()，
+     中间会被一条直线连起来。所以这里每只眼睛都单独 beginPath。 */
+  for (let i = 0; i < 2; i++) {
+    const ex = i ? 5.4 : -5.4;
+    g.beginPath();
+    g.ellipse(ex, -38.8, 4.2, 4.9, 0, 0, SKIN_TAU);
+    g.fillStyle = '#ffffff';
+    g.fill();
+    g.beginPath();
+    g.ellipse(ex, -38.8, 4.2, 4.9, 0, 0, SKIN_TAU);
+    g.strokeStyle = 'rgba(48,28,20,0.22)';
+    g.lineWidth = 0.9;
+    g.stroke();
+
+    // 上眼睑的一层阴影：眼睛不至于像贴上去的贴纸
+    g.save();
+    g.beginPath();
+    g.ellipse(ex, -38.8, 4.2, 4.9, 0, 0, SKIN_TAU);
+    g.clip();
+    const lid = g.createLinearGradient(0, -43.7, 0, -38.4);
+    lid.addColorStop(0, 'rgba(72,42,30,0.30)');
+    lid.addColorStop(1, 'rgba(72,42,30,0)');
+    g.fillStyle = lid;
+    g.fillRect(ex - 4.4, -43.9, 8.8, 5.8);
+    g.restore();
+  }
+
+  // 鼻子：一个小鼻头，脸上才有起伏
+  g.fillStyle = 'rgba(120,58,38,0.26)';
+  g.beginPath();
+  g.ellipse(0, -35.1, 1.8, 1.2, 0, 0, SKIN_TAU);
+  g.fill();
+
+  // 眉毛
+  g.strokeStyle = deep;
+  g.globalAlpha = 0.5;
+  g.lineWidth = 1.5;
+  g.beginPath();
+  g.moveTo(-8.6, -45.8);
+  g.quadraticCurveTo(-5.4, -47.6, -2.6, -45.9);
+  g.moveTo(8.6, -45.8);
+  g.quadraticCurveTo(5.4, -47.6, 2.6, -45.9);
+  g.stroke();
+  g.globalAlpha = 1;
+
+  // 腮红
   g.fillStyle = s.cheek;
   g.beginPath();
-  g.ellipse(-8.5, -14.96, 3.4, 2.2, 0, 0, SKIN_TAU);
-  g.ellipse(8.5, -14.96, 3.4, 2.2, 0, 0, SKIN_TAU);
+  g.ellipse(-9.7, -33.4, 3.5, 2.3, 0, 0, SKIN_TAU);
+  g.ellipse(9.7, -33.4, 3.5, 2.3, 0, 0, SKIN_TAU);
   g.fill();
+
+  // 嘴
+  g.strokeStyle = lerpHex(deep, '#000000', 0.15);
+  g.lineWidth = 1.3;
+  g.beginPath();
+  g.arc(0, -32.8, 3.5, Math.PI * 0.18, Math.PI * 0.82);
+  g.stroke();
+
+  /* ---------- 5. 帽子 / 头巾 ---------- */
+  if (s.hat === 'crown') {
+    g.fillStyle = '#ffd94a';
+    g.beginPath();
+    g.moveTo(-7.6, -52.2);
+    g.lineTo(-7.6, -57.6);
+    g.lineTo(-3.2, -54.6);
+    g.lineTo(0, -59.6);
+    g.lineTo(3.2, -54.6);
+    g.lineTo(7.6, -57.6);
+    g.lineTo(7.6, -52.2);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = 'rgba(146,92,6,0.65)';
+    g.lineWidth = 1;
+    g.stroke();
+    g.fillStyle = '#ff5f5f';
+    g.beginPath();
+    g.arc(0, -55.6, 1.6, 0, SKIN_TAU);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.45)';
+    g.beginPath();
+    g.arc(-3.2, -55.4, 1, 0, SKIN_TAU);
+    g.arc(3.2, -55.4, 1, 0, SKIN_TAU);
+    g.fill();
+  } else if (s.hat === 'band') {
+    g.fillStyle = s.band[0];
+    rr(g, -14, -49.4, 28, 5.6, 2.8);
+    g.fill();
+    g.fillStyle = s.band[1];
+    rr(g, -14, -49.4, 28, 1.8, 1.4);
+    g.fill();
+    g.strokeStyle = s.band[0];
+    g.lineWidth = 2.2;
+    g.beginPath();
+    g.moveTo(13, -47.6);
+    g.quadraticCurveTo(19.2, -45.2, 20.6, -40.2);
+    g.moveTo(13, -46);
+    g.quadraticCurveTo(18.2, -42.4, 18.8, -37.8);
+    g.stroke();
+  } else if (s.hat === 'beanie') {
+    g.fillStyle = s.band[0];
+    g.beginPath();
+    g.arc(0, -45, 13, Math.PI * 1.02, Math.PI * 1.98);
+    g.closePath();
+    g.fill();
+    g.fillStyle = s.band[1];
+    rr(g, -14.2, -47.6, 28.4, 4.8, 2.4);
+    g.fill();
+    g.fillStyle = '#ffffff';
+    g.beginPath();
+    g.arc(0, -58.4, 3.6, 0, SKIN_TAU);
+    g.fill();
+    g.fillStyle = 'rgba(190,225,255,0.75)';
+    g.beginPath();
+    g.arc(0, -58.4, 1.6, 0, SKIN_TAU);
+    g.fill();
+  }
+
+  /* ---------- 6. 轮廓：下沿压暗，头才不会飘在身体上 ---------- */
+  g.strokeStyle = 'rgba(88,38,22,0.20)';
+  g.lineWidth = 2.6;
+  g.beginPath();
+  g.arc(0, -39, 13.3, Math.PI * 0.16, Math.PI * 0.84);
+  g.stroke();
+
+  if (!s.hat) {
+    // 头顶一小撮呆毛
+    g.strokeStyle = lerpHex(dark, '#000000', 0.12);
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(-1.6, -52.7);
+    g.quadraticCurveTo(1.2, -56.4, 4.2, -54.4);
+    g.stroke();
+  }
+
+  /* ---------- 7. 高光 & 轮廓光 ---------- */
+  if (!s.hat) {
+    g.fillStyle = 'rgba(255,255,255,0.32)';
+    g.beginPath();
+    g.ellipse(-5.8, -48, 4.6, 2.7, -0.55, 0, SKIN_TAU);
+    g.fill();
+  }
+  g.strokeStyle = 'rgba(255,255,255,0.30)';
+  g.lineWidth = 1.7;
+  g.beginPath();
+  g.arc(0, -39, 13.8, Math.PI * 1.06, Math.PI * 1.60);
+  g.stroke();
 
   return { c: c, minX: minX, minY: minY, w: w, h: h };
 }
+
 
 /* 根据 dayT 重建天空与太阳，仅在天色变化显著时调用 */
 function rebuildSky() {
@@ -843,6 +1087,52 @@ function drawForeground() {
   }
 }
 
+/* 太阳光芒：一次性烘一张放射状光带，运行时只转个角度、换个透明度。
+   比每帧画十几条 stroke 便宜得多，也不会在低端机上掉帧。 */
+function buildSunRays() {
+  const R = 200;
+  const c = document.createElement('canvas');
+  c.width = c.height = R * 2;
+  const g = c.getContext('2d');
+  g.translate(R, R);
+  const n = 18;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + rnd(i * 1.7) * 0.1;
+    const len = R * (0.52 + rnd(i * 3.9 + 1.1) * 0.46);
+    const halfTan = Math.tan(0.022 + rnd(i * 6.3 + 2.2) * 0.05);
+    g.save();
+    g.rotate(a);
+    const grd = g.createLinearGradient(14, 0, len, 0);
+    grd.addColorStop(0.00, 'rgba(255, 250, 214, 0)');
+    grd.addColorStop(0.30, 'rgba(255, 247, 190, 0.62)');
+    grd.addColorStop(1.00, 'rgba(255, 240, 170, 0)');
+    g.fillStyle = grd;
+    g.beginPath();
+    g.moveTo(12, 0);
+    g.lineTo(len, halfTan * len);
+    g.lineTo(len, -halfTan * len);
+    g.closePath();
+    g.fill();
+    g.restore();
+  }
+  return { c: c, r: R };
+}
+
+/* 一块软阴影：柱子、角色都拿它当接触阴影，比纯色椭圆更像真的 */
+function buildShadowSprite() {
+  const s = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  rg.addColorStop(0.00, 'rgba(0,0,0,0.46)');
+  rg.addColorStop(0.48, 'rgba(0,0,0,0.20)');
+  rg.addColorStop(1.00, 'rgba(0,0,0,0)');
+  g.fillStyle = rg;
+  g.fillRect(0, 0, s, s);
+  return c;
+}
+
 function buildScene() {
   const ty = topY();
 
@@ -868,6 +1158,8 @@ function buildScene() {
   vignette = buildVignette();
   starField = buildStars();
   fgLayer = buildForeground();
+  raySprite = buildSunRays();
+  shadowSprite = buildShadowSprite();
 
   // 角色精灵依赖 DPR，每次重建都强制刷新
   playerSprite = buildPlayerSprite();
@@ -1454,39 +1746,46 @@ function ensurePlatforms() {
   }
 }
 
+/* 柱子贴图：柱身材质 + 顶部盖板 + 侧面厚度 + 底部渐隐。
+   宽度分桶缓存（getPlatformSprite），所以这里可以画得细一点。 */
 function buildPlatformSprite(kind, bucket, columnH) {
   const isSpring = kind === 'spring';
   const isSway = kind === 'sway';
-  const padX = 14;
-  const top = PLAT_TOP_PAD;
+  const padX = 16;
+  const top = PLAT_TOP_PAD + 2;
   const w = bucket + padX * 2;
   const h = columnH;
   const L = makeLayerCanvas(w, h + top, 1.4);
   const g = L.g;
-  // 先整体下移：草丛画在 y<0 的位置，以前直接落在画布外被裁掉了
   g.translate(0, top);
   const left = padX;
   const width = bucket;
+  const right = left + width;
+  const capH = 11;
 
-  const grd = g.createLinearGradient(left, 0, left + width, 0);
+  /* ---------- 1. 柱身主体 ---------- */
+  const grd = g.createLinearGradient(left, 0, right, 0);
   if (isSpring) {
-    grd.addColorStop(0.00, '#2f6b35');
-    grd.addColorStop(0.12, '#4c9145');
-    grd.addColorStop(0.52, '#69b556');
-    grd.addColorStop(0.88, '#3f7d3a');
-    grd.addColorStop(1.00, '#295c2b');
+    grd.addColorStop(0.00, '#234f1e');
+    grd.addColorStop(0.12, '#3f7b31');
+    grd.addColorStop(0.34, '#63ab4a');
+    grd.addColorStop(0.56, '#7cc45d');
+    grd.addColorStop(0.80, '#478636');
+    grd.addColorStop(1.00, '#1c401b');
   } else if (isSway) {
-    grd.addColorStop(0.00, '#4a5f66');
-    grd.addColorStop(0.12, '#708c92');
-    grd.addColorStop(0.52, '#93b3b8');
-    grd.addColorStop(0.88, '#62808a');
-    grd.addColorStop(1.00, '#41565f');
+    grd.addColorStop(0.00, '#33474f');
+    grd.addColorStop(0.12, '#5d7c85');
+    grd.addColorStop(0.34, '#87aab2');
+    grd.addColorStop(0.56, '#a3c6cc');
+    grd.addColorStop(0.80, '#6b8c96');
+    grd.addColorStop(1.00, '#2d4048');
   } else {
-    grd.addColorStop(0.00, '#5f3a1c');
-    grd.addColorStop(0.12, '#8a5629');
-    grd.addColorStop(0.52, '#a56e3c');
-    grd.addColorStop(0.88, '#7a4a24');
-    grd.addColorStop(1.00, '#55311a');
+    grd.addColorStop(0.00, '#452812');
+    grd.addColorStop(0.12, '#74441f');
+    grd.addColorStop(0.34, '#9a632f');
+    grd.addColorStop(0.56, '#b37c44');
+    grd.addColorStop(0.80, '#835027');
+    grd.addColorStop(1.00, '#3d2210');
   }
   g.fillStyle = grd;
   g.fillRect(left, 0, width, h);
@@ -1495,50 +1794,189 @@ function buildPlatformSprite(kind, bucket, columnH) {
   g.beginPath();
   g.rect(left, 0, width, h);
   g.clip();
-  g.strokeStyle = isSpring ? 'rgba(20, 60, 25, 0.26)'
-    : (isSway ? 'rgba(28, 52, 62, 0.26)' : 'rgba(48, 26, 10, 0.26)');
-  g.lineWidth = 1.6;
-  for (let i = 1; i <= 3; i++) {
-    const lx = left + width * i / 4;
-    g.beginPath();
-    g.moveTo(lx, 10);
-    g.bezierCurveTo(lx + 4, 80, lx - 4, 170, lx + 3, h);
-    g.stroke();
-  }
-  g.restore();
 
-  g.fillStyle = isSpring ? '#a6e07a' : (isSway ? '#9fe0ef' : '#cba06b');
-  g.fillRect(left, 0, width, 9);
-  g.fillStyle = 'rgba(255, 245, 220, 0.45)';
-  g.fillRect(left, 0, width, 2.5);
-  g.fillStyle = isSpring ? 'rgba(30, 80, 40, 0.30)'
-    : (isSway ? 'rgba(20, 56, 70, 0.30)' : 'rgba(60, 34, 14, 0.28)');
-  g.fillRect(left, 9, width, 2);
-
+  /* ---------- 2. 材质纹理 ---------- */
   if (isSpring) {
-    g.fillStyle = 'rgba(190, 240, 140, 0.55)';
-    for (let i = 0; i < 4; i++) {
-      const mx = left + width * (0.12 + i * 0.24);
+    // 横向节环：像一截被压紧的弹簧
+    for (let y = 26; y < h; y += 34) {
+      g.strokeStyle = 'rgba(24, 62, 22, 0.34)';
+      g.lineWidth = 2.4;
       g.beginPath();
-      g.arc(mx, 3.5, 2.6, 0, Math.PI * 2);
+      g.moveTo(left, y);
+      g.quadraticCurveTo(left + width / 2, y + 5.5, right, y);
+      g.stroke();
+      g.strokeStyle = 'rgba(190, 240, 150, 0.24)';
+      g.lineWidth = 1.4;
+      g.beginPath();
+      g.moveTo(left, y - 3);
+      g.quadraticCurveTo(left + width / 2, y + 2.5, right, y - 3);
+      g.stroke();
+    }
+  } else if (isSway) {
+    // 拉丝金属：细密的竖向亮线 + 两道接缝 + 铆钉
+    for (let i = 0; i < 26; i++) {
+      const lx = left + rnd(i * 2.7 + bucket * 0.7) * width;
+      g.strokeStyle = i % 3 === 0 ? 'rgba(255,255,255,0.10)' : 'rgba(20, 44, 52, 0.08)';
+      g.lineWidth = i % 3 === 0 ? 1.2 : 1;
+      g.beginPath();
+      g.moveTo(lx, 8);
+      g.lineTo(lx + (rnd(i * 5.1) - 0.5) * 3, h);
+      g.stroke();
+    }
+    for (let i = 1; i <= 3; i++) {
+      const sy = 60 + i * (h / 5);
+      g.fillStyle = 'rgba(20, 40, 48, 0.26)';
+      g.fillRect(left, sy, width, 2.4);
+      g.fillStyle = 'rgba(255,255,255,0.14)';
+      g.fillRect(left, sy + 2.4, width, 1.2);
+    }
+    for (let i = 0; i < 4; i++) {
+      const ry = 22 + Math.floor(i / 2) * 16;
+      const rx = left + (i % 2 ? width - 5.5 : 5.5);
+      g.fillStyle = 'rgba(214, 240, 248, 0.55)';
+      g.beginPath();
+      g.arc(rx, ry, 2, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = 'rgba(20, 40, 48, 0.35)';
+      g.beginPath();
+      g.arc(rx + 0.6, ry + 0.7, 1.1, 0, Math.PI * 2);
+      g.fill();
+    }
+  } else {
+    // 木纹：竖向的年轮 + 两个结疤
+    for (let i = 0; i < 5; i++) {
+      const lx = left + width * (0.12 + i * 0.19);
+      g.strokeStyle = 'rgba(52, 28, 10, 0.30)';
+      g.lineWidth = i % 2 ? 1.3 : 2;
+      g.beginPath();
+      g.moveTo(lx, 9);
+      g.bezierCurveTo(lx + 5, 70, lx - 5, 160, lx + 3, h);
+      g.stroke();
+      g.strokeStyle = 'rgba(255, 226, 178, 0.10)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(lx + 2.2, 12);
+      g.bezierCurveTo(lx + 7, 72, lx - 3, 162, lx + 5, h);
+      g.stroke();
+    }
+    for (let i = 0; i < 2; i++) {
+      const kx = left + width * (0.26 + i * 0.44);
+      const ky = 40 + rnd(i * 7.3 + bucket * 0.31) * Math.max(20, h * 0.5);
+      g.strokeStyle = 'rgba(56, 30, 12, 0.34)';
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.ellipse(kx, ky, 5.5, 8, 0, 0, Math.PI * 2);
+      g.stroke();
+      g.beginPath();
+      g.ellipse(kx, ky, 2.4, 3.8, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+    // 靠上的青苔
+    g.fillStyle = 'rgba(96, 158, 74, 0.34)';
+    for (let i = 0; i < 5; i++) {
+      const mx = left + width * (0.08 + i * 0.2);
+      g.beginPath();
+      g.ellipse(mx, 14 + rnd(i * 3.3) * 10, 7 + rnd(i * 5.7) * 5, 4 + rnd(i * 2.1) * 3, 0, 0, Math.PI * 2);
       g.fill();
     }
   }
 
-  g.strokeStyle = isSpring ? '#3f8a35' : (isSway ? '#57b6c9' : '#4f9b3f');
+  /* 左侧亮面 / 右侧暗面：柱身的厚度感 */
+  const side = g.createLinearGradient(left, 0, right, 0);
+  side.addColorStop(0.00, 'rgba(255,255,255,0.00)');
+  side.addColorStop(0.06, 'rgba(255,255,255,0.22)');
+  side.addColorStop(0.16, 'rgba(255,255,255,0.05)');
+  side.addColorStop(0.72, 'rgba(0,0,0,0.00)');
+  side.addColorStop(0.92, 'rgba(0,0,0,0.22)');
+  side.addColorStop(1.00, 'rgba(0,0,0,0.38)');
+  g.fillStyle = side;
+  g.fillRect(left, 0, width, h);
+
+  /* 盖板下方的接触阴影 */
+  const ao = g.createLinearGradient(0, capH, 0, capH + 16);
+  ao.addColorStop(0, 'rgba(0,0,0,0.22)');
+  ao.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = ao;
+  g.fillRect(left, capH, width, 16);
+  g.restore();
+
+  /* ---------- 3. 顶部盖板 ---------- */
+  const capLight = isSpring ? '#b7ec8d' : (isSway ? '#bfeefb' : '#e2b982');
+  const capMid = isSpring ? '#7cc95a' : (isSway ? '#8fd3e4' : '#c08e52');
+  const capDark = isSpring ? '#3f7a2f' : (isSway ? '#3d7f93' : '#6a3f1c');
+
+  g.beginPath();
+  g.moveTo(left - 2, capH);
+  g.lineTo(left - 2, 4);
+  g.quadraticCurveTo(left - 2, -1.5, left + 3.5, -1.5);
+  g.lineTo(right - 3.5, -1.5);
+  g.quadraticCurveTo(right + 2, -1.5, right + 2, 4);
+  g.lineTo(right + 2, capH);
+  g.closePath();
+  const capG = g.createLinearGradient(0, -1.5, 0, capH);
+  capG.addColorStop(0, capLight);
+  capG.addColorStop(0.55, capMid);
+  capG.addColorStop(1, capDark);
+  g.fillStyle = capG;
+  g.fill();
+
+  // 盖板顶面高光
+  g.fillStyle = 'rgba(255, 255, 255, 0.45)';
+  g.beginPath();
+  g.moveTo(left + 1, 2.4);
+  g.lineTo(right - 1, 2.4);
+  g.lineTo(right - 3, 5.2);
+  g.lineTo(left + 3, 5.2);
+  g.closePath();
+  g.fill();
+
+  // 盖板边缘
+  g.strokeStyle = capDark;
+  g.lineWidth = 1.2;
+  g.beginPath();
+  g.moveTo(left - 2, capH);
+  g.lineTo(left - 2, 4);
+  g.quadraticCurveTo(left - 2, -1.5, left + 3.5, -1.5);
+  g.lineTo(right - 3.5, -1.5);
+  g.quadraticCurveTo(right + 2, -1.5, right + 2, 4);
+  g.lineTo(right + 2, capH);
+  g.stroke();
+
+  /* 弹簧柱：盖板上的亮绿光点 */
+  if (isSpring) {
+    g.fillStyle = 'rgba(226, 255, 176, 0.85)';
+    for (let i = 0; i < 4; i++) {
+      const mx = left + width * (0.14 + i * 0.24);
+      g.beginPath();
+      g.arc(mx, 1.4, 2.2, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+
+  /* 盖板上的草：三撮 */
+  g.strokeStyle = isSpring ? '#3d7f30' : (isSway ? '#4f9cb0' : '#4f8f38');
   g.lineWidth = 2;
   g.lineCap = 'round';
   for (let i = 0; i < 3; i++) {
     const gx = left + width * (0.18 + i * 0.3);
-    const gh = 5 + rnd(i * 3.7 + bucket * 0.13) * 6;
+    const gh = 5 + rnd(i * 3.7 + bucket * 0.13) * 7;
     g.beginPath();
-    g.moveTo(gx, 1);
+    g.moveTo(gx, 0.5);
     g.quadraticCurveTo(gx + 3, -gh * 0.55, gx + 6.5, -gh);
     g.stroke();
   }
 
+  /* ---------- 4. 底部融进地面 ---------- */
+  const fade = g.createLinearGradient(0, h - 120, 0, h);
+  fade.addColorStop(0, 'rgba(58, 116, 58, 0)');
+  fade.addColorStop(0.55, 'rgba(52, 104, 52, 0.45)');
+  fade.addColorStop(1, 'rgba(45, 92, 48, 0.85)');
+  g.fillStyle = fade;
+  g.fillRect(left + 1, h - 120, width - 2, 120);
+
   return { c: L.c, w: w, h: h + top, top: top, columnH: h };
 }
+
 
 /* 平台贴图按「宽度分桶 + 材质」缓存复用。
    以前每生成一个平台就现场新建一张 (宽度 × 屏幕高度 × 1.4²) 的画布，
@@ -2438,7 +2876,19 @@ function drawVignette() {
   ctx.drawImage(vignette, 0, 0, W, H);
 }
 
-function drawSun() {
+function drawSun(now) {
+  // 光芒：低画质档位直接跳过（它最贵，但纯装饰）
+  if (raySprite && perfLevel < 2) {
+    const R = sunR * 6.4;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.19 * (1 - dayT * 0.42) * (0.86 + Math.sin(now * 0.0004) * 0.14);
+    ctx.translate(sunX, sunY);
+    ctx.rotate(now * 0.000018);
+    ctx.drawImage(raySprite.c, -R, -R, R * 2, R * 2);
+    ctx.restore();
+  }
+
   ctx.fillStyle = sunGrad;
   ctx.beginPath();
   ctx.arc(sunX, sunY, sunR * 3.6, 0, Math.PI * 2);
@@ -2546,10 +2996,18 @@ function drawPlatforms(now) {
     const sprite = getPlatformSprite(p);
 
     const ex = p.squash * 6;
-    ctx.fillStyle = 'rgba(0,0,0,0.16)';
-    ctx.beginPath();
-    ctx.ellipse(sx + p.w / 2, ty + 6, (p.w + ex * 2) * 0.62, 7, 0, 0, Math.PI * 2);
-    ctx.fill();
+    if (shadowSprite) {
+      // 软阴影贴图：中间深、边缘化开，比一圈硬边的椭圆自然
+      const shW = (p.w + ex * 2) * 1.9;
+      ctx.globalAlpha = 0.62;
+      ctx.drawImage(shadowSprite, sx + p.w / 2 - shW / 2, ty - 9, shW, 30);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.16)';
+      ctx.beginPath();
+      ctx.ellipse(sx + p.w / 2, ty + 6, (p.w + ex * 2) * 0.62, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     const d = p.squash * 13;
     const scaleX = (p.w + ex * 2) / p.w;
@@ -2591,9 +3049,9 @@ function drawTrail() {
     ctx.fillStyle = trailColor;
     ctx.beginPath();
     if (glide) {
-      ctx.ellipse(t.x - camX, t.y - 17, 17 * k2 + 6, 3.2 * k2 + 1.2, 0, 0, SKIN_TAU);
+      ctx.ellipse(t.x - camX, t.y - 20, 17 * k2 + 6, 3.2 * k2 + 1.2, 0, 0, SKIN_TAU);
     } else {
-      ctx.arc(t.x - camX, t.y - 17, 9 * k2 + 2, 0, Math.PI * 2);
+      ctx.arc(t.x - camX, t.y - 20, 9 * k2 + 2, 0, Math.PI * 2);
     }
     ctx.fill();
   }
@@ -2794,11 +3252,18 @@ function drawPlayer(now) {
     const alt = Math.max(0, ty - player.y);
     const alpha = Math.max(0, 0.24 - alt * 0.00055);
     if (alpha > 0.01) {
-      ctx.fillStyle = 'rgba(0,0,0,' + alpha.toFixed(3) + ')';
       const sc = Math.max(0.35, 1 - alt * 0.0022);
-      ctx.beginPath();
-      ctx.ellipse(sx, ty + 3, 16 * sc, 5.5 * sc, 0, 0, Math.PI * 2);
-      ctx.fill();
+      if (shadowSprite) {
+        const shW = 50 * sc, shH = 21 * sc;
+        ctx.globalAlpha = Math.min(1, alpha * 2.4);
+        ctx.drawImage(shadowSprite, sx - shW / 2, ty + 3 - shH / 2, shW, shH);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillStyle = 'rgba(0,0,0,' + alpha.toFixed(3) + ')';
+        ctx.beginPath();
+        ctx.ellipse(sx, ty + 3, 16 * sc, 5.5 * sc, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
@@ -2821,9 +3286,10 @@ function drawPlayer(now) {
   ctx.translate(sx, player.y - dashLift + bob);
 
   if (player.state === 'jump' || player.state === 'fall') {
-    ctx.translate(0, -17);
+    // 旋转支点放在身体中心（精灵里大约 -26），转起来才是「翻跟头」而不是甩脚
+    ctx.translate(0, -26);
     ctx.rotate(player.rot);
-    ctx.translate(0, 17);
+    ctx.translate(0, 26);
   }
 
   let sxs = 1, sys = 1;
@@ -2847,14 +3313,21 @@ function drawPlayer(now) {
 
   // 皮肤自带的光晕，画在身体底下
   if (sk.glow) {
-    const gg = ctx.createRadialGradient(0, -18, 2, 0, -18, 34);
+    const gg = ctx.createRadialGradient(0, -21, 2, 0, -21, 35);
     gg.addColorStop(0, sk.glow);
     gg.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = gg;
     ctx.beginPath();
-    ctx.arc(0, -18, 34, 0, SKIN_TAU);
+    ctx.arc(0, -21, 35, 0, SKIN_TAU);
     ctx.fill();
   }
+
+  /* 姿态：四肢每帧画，身体用缓存精灵。
+     起跳 / 下落 / 冲刺 / 蓄力各一套端点，不用写三段动画。 */
+  const P = heroPose(now);
+  drawHeroLimb(sk, 'leg', -5.8, P.backLegX, P.backLegY, true);
+  drawHeroLimb(sk, 'leg', 5.8, P.frontLegX, P.frontLegY, false);
+  drawHeroLimb(sk, 'arm', -11.2, P.backArmX, P.backArmY, true);
 
   if (playerSprite) {
     ctx.drawImage(
@@ -2864,33 +3337,141 @@ function drawPlayer(now) {
     );
   }
 
-  const look = charging ? 1.6 * charge : 0;
+  drawHeroLimb(sk, 'arm', 11.2, P.frontArmX, P.frontArmY, false);
+  drawHeroFace(sk, now);
+
+  ctx.restore();
+}
+
+/* 四肢端点：anchor 是肩/胯的本地坐标，返回值是手/脚落点。
+   坐标原点在脚底中线，y 向上为负，和角色精灵同一套本地坐标。 */
+function heroPose(now) {
+  const air = player.state === 'jump' || player.state === 'fall';
+  const glide = player.state === 'glide';
+  const rise = air ? clamp(-player.vy / 800, -1, 1) : 0;
+  const spread = air ? clamp(Math.abs(player.vy) / 900, 0, 1) : 0;
+  const swing = (player.state === 'idle' && !charging) ? Math.sin(now * 0.0024) : 0;
+
+  let frontLegX = 6.9, frontLegY = -1.5;
+  let backLegX = -6.9, backLegY = -1.5;
+  let frontArmX = 13.6 + swing * 0.5, frontArmY = -16.9 + swing * 0.9;
+  let backArmX = -13.6 - swing * 0.5, backArmY = -16.9 - swing * 0.9;
+
+  if (glide) {
+    // 冲刺：四肢全往身后拖，身体被弹射出去
+    frontLegX = 1.4; frontLegY = -1.8;
+    backLegX = -8.2; backLegY = -3.4;
+    frontArmX = 5.2; frontArmY = -20.4;
+    backArmX = -3.8; backArmY = -21.8;
+  } else if (air) {
+    // 腾空：上升时收腿抬臂，下落时张开准备落地
+    frontLegX = 6.2 + spread * 2.4; frontLegY = -1.6 - spread * 3.6;
+    backLegX = -5.4 - spread * 3.2; backLegY = -1.6 - spread * 1.8;
+    frontArmX = 13.8 + rise * 2.6; frontArmY = -18 - rise * 7.4;
+    backArmX = -13.8 - rise * 2.6; backArmY = -18 - rise * 7.4;
+  } else if (charging) {
+    // 蓄力：手臂往后背，重心往下压
+    frontArmX = 13.2 + charge * 1.6; frontArmY = -16 + charge * 1.8;
+    backArmX = -13.2 - charge * 1.6; backArmY = -16 + charge * 1.8;
+    frontLegY = -1.4 - charge * 0.5;
+    backLegY = -1.4 - charge * 0.5;
+  }
+
+  return {
+    frontLegX: frontLegX, frontLegY: frontLegY,
+    backLegX: backLegX, backLegY: backLegY,
+    frontArmX: frontArmX, frontArmY: frontArmY,
+    backArmX: backArmX, backArmY: backArmY
+  };
+}
+
+/* 一条腿 / 一条手臂：圆头直线 + 脚（鞋）或手掌。
+   back = true 的那一侧压暗，前后层次一眼就能看出来。 */
+function drawHeroLimb(sk, kind, anchorX, x, y, back) {
+  const isLeg = kind === 'leg';
+  const anchorY = isLeg ? -11 : -25.8;
+  const base = isLeg ? sk.body[1] : sk.body[0];
+
+  ctx.strokeStyle = back
+    ? lerpHex(base, '#000000', 0.26)
+    : lerpHex(base, '#ffffff', isLeg ? 0.02 : 0.10);
+  ctx.lineWidth = isLeg ? 6.6 : 5.4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(anchorX, anchorY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+
+  if (isLeg) {
+    ctx.fillStyle = back ? lerpHex(sk.band[0], '#000000', 0.22) : sk.band[0];
+    ctx.beginPath();
+    ctx.ellipse(x + (back ? -0.6 : 0.9), y - 0.2, 4.4, 2.9, 0, 0, SKIN_TAU);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = back ? lerpHex(sk.body[0], sk.body[1], 0.55) : lerpHex(sk.body[0], '#ffffff', 0.22);
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, SKIN_TAU);
+    ctx.fill();
+  }
+}
+
+/* 表情：瞳孔看方向、4.2 秒眨一次眼、死亡时变 X 眼。
+   精灵里已经烘焙了眼白，这里只叠最上层的那点东西。 */
+function drawHeroFace(sk, now) {
+  const ey = -38.9;
+
+  if (player.state === 'dead') {
+    ctx.strokeStyle = sk.eye || '#2b2320';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let s2 = -1; s2 <= 1; s2 += 2) {
+      const cx2 = s2 * 5.4;
+      ctx.moveTo(cx2 - 3.2, ey - 3.2); ctx.lineTo(cx2 + 3.2, ey + 3.2);
+      ctx.moveTo(cx2 + 3.2, ey - 3.2); ctx.lineTo(cx2 - 3.2, ey + 3.2);
+    }
+    ctx.stroke();
+    return;
+  }
+
+  if ((now % 4200) > 4110) {          // 眨眼
+    ctx.strokeStyle = sk.eye || '#2b2320';
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(-5.4, ey - 1.2, 4.2, Math.PI * 0.16, Math.PI * 0.84);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(5.4, ey - 1.2, 4.2, Math.PI * 0.16, Math.PI * 0.84);
+    ctx.stroke();
+    return;
+  }
+
+  const look = charging ? 1.7 * charge : 0;
   const g = eyeGlow;
 
   ctx.fillStyle = sk.eye || '#2b2320';
   ctx.beginPath();
-  ctx.arc(-5.5 + look, -20.4, 3.1, 0, Math.PI * 2);
-  ctx.arc(5.5 + look, -20.4, 3.1, 0, Math.PI * 2);
+  ctx.ellipse(-5.4 + look, ey, 2.6, 3.1, 0, 0, SKIN_TAU);
+  ctx.ellipse(5.4 + look, ey, 2.6, 3.1, 0, 0, SKIN_TAU);
   ctx.fill();
 
-  const glR = 1.25 + g * 2.2;
+  const glR = 1.15 + g * 2.0;
   ctx.fillStyle = g > 0.35 ? 'rgba(255, 250, 220, 1)' : '#ffffff';
   ctx.beginPath();
-  ctx.arc(-4.4 + look, -21.6, glR, 0, Math.PI * 2);
-  ctx.arc(6.6 + look, -21.6, glR, 0, Math.PI * 2);
+  ctx.arc(-4.4 + look, ey - 1.3, glR, 0, SKIN_TAU);
+  ctx.arc(6.4 + look, ey - 1.3, glR, 0, SKIN_TAU);
   ctx.fill();
 
   if (g > 0.05) {
-    ctx.globalAlpha = g * 0.55;
+    ctx.globalAlpha = g * 0.5;
     ctx.fillStyle = 'rgba(255, 230, 120, 1)';
     ctx.beginPath();
-    ctx.arc(-5.5 + look, -20.4, 5 + g * 4, 0, Math.PI * 2);
-    ctx.arc(5.5 + look, -20.4, 5 + g * 4, 0, Math.PI * 2);
+    ctx.arc(-5.4 + look, ey, 6 + g * 4, 0, SKIN_TAU);
+    ctx.arc(5.4 + look, ey, 6 + g * 4, 0, SKIN_TAU);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
-
-  ctx.restore();
 }
 
 function drawFx() {
@@ -3475,6 +4056,53 @@ function drawBoard() {
 /* ============================================================
  *  19. 自适应 UI
  * ============================================================ */
+/* 帧率胶囊：右上角按钮列下面，点一下切换 隐藏 / FPS / FPS+ms。
+   数字用平滑值，且等宽对齐，60 → 59 的时候数字不会左右跳。 */
+function drawFpsChip() {
+  if (!fpsMode) return;
+  if (settingsOpen || boardOpen || achOpen) return;   // 面板开着就别挡视线
+  const k = uiScale();
+  const fb = getFullscreenBtn();
+  const fs = (isLandscape() ? 10 : 11) * k;
+  const h = (isLandscape() ? 20 : 22) * k;
+  ctx.font = fontOf(fs, 'bold');
+  const txt = fpsShown + ' FPS' + (fpsMode === 2 ? '  ' + fpsMsShown.toFixed(1) + 'ms' : '');
+  const w = ctx.measureText(txt).width + 22 * k;
+
+  // 右对齐到按钮列；屏幕太窄时也不越界
+  let x = Math.min(W - 10 * k - w, fb.x + fb.r - w);
+  x = Math.max(8 * k, x);
+  const y = fb.y + fb.r + 8 * k;
+
+  ctx.save();
+  const bg = ctx.createLinearGradient(0, y, 0, y + h);
+  bg.addColorStop(0, 'rgba(10, 32, 20, 0.52)');
+  bg.addColorStop(1, 'rgba(10, 32, 20, 0.34)');
+  ctx.fillStyle = bg;
+  rr(ctx, x, y, w, h, h / 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = fpsColor();
+  ctx.beginPath();
+  ctx.arc(x + 9.5 * k, y + h / 2, 2.6 * k, 0, SKIN_TAU);
+  ctx.fill();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = fontOf(fs, 'bold');
+  ctx.fillText(txt, x + 15.5 * k, y + h / 2 + 0.5);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  rr(ctx, x + 2, y + 1.5, w - 4, h * 0.42, h * 0.21);
+  ctx.fill();
+  ctx.restore();
+
+  addHit(x - 6, y - 6, w + 12, h + 12, function () { setFpsMode((fpsMode + 1) % 3); });
+}
+
 function drawUI(now) {
   const land = isLandscape();
   const k = uiScale();
@@ -3644,6 +4272,7 @@ function drawUI(now) {
   }
 
   drawButtons();
+  drawFpsChip();
 }
 
 /* 通用圆角胶囊按钮 */
@@ -3855,90 +4484,180 @@ function drawSkinAvatar(cx, cy, r, sk, unlocked) {
   ctx.save();
   ctx.globalAlpha = unlocked ? 1 : 0.40;
 
+  /* 半身像：头部按实战比例缩小，身体只画到腰 —— 皮肤选择那种小格子里
+     塞全身会糊，塞半身反而更像「这个角色长什么样」。 */
+  const sc = (r * 0.68) / 14.6;
+  ctx.translate(cx, cy - r * 0.18);
+  ctx.scale(sc, sc);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  const light = sk.body[0], dark = sk.body[1];
+  const face = sk.face || '#ffe0c8';
+  const deep = lerpHex(dark, '#000000', 0.42);
+
   if (sk.glow) {
-    const gg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.9);
+    const gg = ctx.createRadialGradient(0, 0, 2, 0, 0, 40);
     gg.addColorStop(0, sk.glow);
     gg.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = gg;
     ctx.beginPath();
-    ctx.arc(cx, cy, r * 1.9, 0, SKIN_TAU);
+    ctx.arc(0, 0, 40, 0, SKIN_TAU);
     ctx.fill();
   }
 
+  /* 耳朵 / 叶子 / 触角 */
+  if (sk.ears === 'round' || sk.ears === 'leaf') {
+    const onlyRight = sk.ears === 'leaf';
+    for (let i = onlyRight ? 1 : 0; i < 2; i++) {
+      const ex = (i === 0 ? -1 : 1) * 13.2;
+      ctx.fillStyle = sk.ear[0];
+      ctx.beginPath();
+      ctx.ellipse(ex, -2, 5.7, 6.1, 0, 0, SKIN_TAU);
+      ctx.fill();
+      ctx.fillStyle = sk.ear[1];
+      ctx.beginPath();
+      ctx.ellipse(ex, -2, 2.8, 3.2, 0, 0, SKIN_TAU);
+      ctx.fill();
+    }
+  }
+  if (sk.ears === 'leaf') {
+    ctx.fillStyle = sk.band[0];
+    ctx.beginPath();
+    ctx.moveTo(-4.6, -11);
+    ctx.quadraticCurveTo(-17.5, -17.5, -9.4, -22);
+    ctx.quadraticCurveTo(-2, -15.5, -4.6, -11);
+    ctx.fill();
+  }
   if (sk.ears === 'antenna') {
     ctx.strokeStyle = sk.band[0];
-    ctx.lineWidth = Math.max(1.2, r * 0.11);
-    ctx.lineCap = 'round';
+    ctx.lineWidth = 2.4;
     ctx.beginPath();
-    ctx.moveTo(cx - r * 0.34, cy - r * 0.48);
-    ctx.lineTo(cx - r * 0.60, cy - r * 1.10);
-    ctx.moveTo(cx + r * 0.34, cy - r * 0.48);
-    ctx.lineTo(cx + r * 0.60, cy - r * 1.10);
+    ctx.moveTo(-6.4, -11); ctx.quadraticCurveTo(-9.4, -16, -10, -20);
+    ctx.moveTo(6.4, -11); ctx.quadraticCurveTo(9.4, -16, 10, -20);
     ctx.stroke();
     ctx.fillStyle = sk.ear[1];
     ctx.beginPath();
-    ctx.arc(cx - r * 0.60, cy - r * 1.10, r * 0.17, 0, SKIN_TAU);
-    ctx.arc(cx + r * 0.60, cy - r * 1.10, r * 0.17, 0, SKIN_TAU);
-    ctx.fill();
-  } else if (sk.ears === 'leaf') {
-    ctx.fillStyle = sk.band[0];
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.40, cy - r * 0.62);
-    ctx.quadraticCurveTo(cx - r * 1.05, cy - r * 1.05, cx - r * 0.52, cy - r * 1.32);
-    ctx.quadraticCurveTo(cx - r * 0.10, cy - r * 1.00, cx - r * 0.40, cy - r * 0.62);
-    ctx.fill();
-    ctx.fillStyle = sk.ear[0];
-    ctx.beginPath();
-    ctx.arc(cx + r * 0.46, cy - r * 0.70, r * 0.26, 0, SKIN_TAU);
-    ctx.fill();
-    ctx.fillStyle = sk.ear[1];
-    ctx.beginPath();
-    ctx.arc(cx + r * 0.46, cy - r * 0.70, r * 0.13, 0, SKIN_TAU);
-    ctx.fill();
-  } else {
-    ctx.fillStyle = sk.ear[0];
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.46, cy - r * 0.66, r * 0.27, 0, SKIN_TAU);
-    ctx.arc(cx + r * 0.46, cy - r * 0.66, r * 0.27, 0, SKIN_TAU);
-    ctx.fill();
-    ctx.fillStyle = sk.ear[1];
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.46, cy - r * 0.68, r * 0.13, 0, SKIN_TAU);
-    ctx.arc(cx + r * 0.46, cy - r * 0.68, r * 0.13, 0, SKIN_TAU);
+    ctx.arc(-10, -21.6, 3.2, 0, SKIN_TAU);
+    ctx.arc(10, -21.6, 3.2, 0, SKIN_TAU);
     ctx.fill();
   }
 
-  // 身体
-  const bg = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
-  bg.addColorStop(0, sk.body[0]);
-  bg.addColorStop(1, sk.body[1]);
+  /* 身体 */
+  const bg = ctx.createLinearGradient(-9, 8, 9, 30);
+  bg.addColorStop(0, lerpHex(light, '#ffffff', 0.18));
+  bg.addColorStop(0.52, light);
+  bg.addColorStop(1, dark);
   ctx.fillStyle = bg;
-  rr(ctx, cx - r * 0.76, cy - r * 0.66, r * 1.52, r * 1.48, r * 0.5);
+  rr(ctx, -11.8, 8.5, 23.6, 22.5, 9.5);
+  ctx.fill();
+  ctx.fillStyle = sk.belly;
+  rr(ctx, -7.8, 11, 15.6, 10.2, 5.1);
   ctx.fill();
 
   if (sk.pattern === 'stripe') {
     ctx.save();
-    ctx.beginPath();
-    rr(ctx, cx - r * 0.76, cy - r * 0.66, r * 1.52, r * 1.48, r * 0.5);
+    rr(ctx, -11.8, 8.5, 23.6, 22.5, 9.5);
     ctx.clip();
     ctx.fillStyle = sk.band[0];
-    ctx.fillRect(cx - r * 0.8, cy - r * 0.16, r * 1.6, r * 0.22);
-    ctx.fillRect(cx - r * 0.8, cy + r * 0.30, r * 1.6, r * 0.22);
+    ctx.fillRect(-12, 18.4, 24, 4.8);
+    ctx.fillRect(-12, 26.8, 24, 4.8);
     ctx.restore();
+  } else {
+    ctx.fillStyle = sk.band[0];
+    rr(ctx, -12.8, 24, 25.6, 6.4, 3.2);
+    ctx.fill();
+    ctx.fillStyle = sk.band[1];
+    rr(ctx, -12.8, 24, 25.6, 2.1, 1.6);
+    ctx.fill();
   }
 
-  // 眼睛
+  /* 头 */
+  const hg = ctx.createRadialGradient(-5.5, -7, 2, -1, 0, 21);
+  hg.addColorStop(0, lerpHex(light, '#ffffff', 0.36));
+  hg.addColorStop(0.55, light);
+  hg.addColorStop(1, dark);
+  ctx.fillStyle = hg;
+  ctx.beginPath();
+  ctx.arc(0, 0, 14.6, 0, SKIN_TAU);
+  ctx.fill();
+
+  ctx.fillStyle = face;
+  ctx.beginPath();
+  ctx.ellipse(0, 2.4, 10.9, 9.7, 0, 0, SKIN_TAU);
+  ctx.fill();
+
+  /* 眼睛 + 嘴 */
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-5.4, 0.1, 4.5, 5.1, 0, 0, SKIN_TAU);
+  ctx.ellipse(5.4, 0.1, 4.5, 5.1, 0, 0, SKIN_TAU);
+  ctx.fill();
   ctx.fillStyle = sk.eye || '#2b2320';
   ctx.beginPath();
-  ctx.arc(cx - r * 0.28, cy - r * 0.12, r * 0.15, 0, SKIN_TAU);
-  ctx.arc(cx + r * 0.28, cy - r * 0.12, r * 0.15, 0, SKIN_TAU);
+  ctx.ellipse(-5.4, 0.3, 2.6, 3.1, 0, 0, SKIN_TAU);
+  ctx.ellipse(5.4, 0.3, 2.6, 3.1, 0, 0, SKIN_TAU);
   ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(-4.4, -0.8, 1.2, 0, SKIN_TAU);
+  ctx.arc(6.4, -0.8, 1.2, 0, SKIN_TAU);
+  ctx.fill();
+  ctx.strokeStyle = lerpHex(deep, '#000000', 0.15);
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(0, 6.2, 3.5, Math.PI * 0.18, Math.PI * 0.82);
+  ctx.stroke();
+  ctx.fillStyle = sk.cheek;
+  ctx.beginPath();
+  ctx.ellipse(-9.7, 5.6, 3.5, 2.3, 0, 0, SKIN_TAU);
+  ctx.ellipse(9.7, 5.6, 3.5, 2.3, 0, 0, SKIN_TAU);
+  ctx.fill();
+
+  /* 帽子 */
+  if (sk.hat === 'crown') {
+    ctx.fillStyle = '#ffd94a';
+    ctx.beginPath();
+    ctx.moveTo(-7.6, -13.2);
+    ctx.lineTo(-7.6, -18.6);
+    ctx.lineTo(-3.2, -15.6);
+    ctx.lineTo(0, -20.6);
+    ctx.lineTo(3.2, -15.6);
+    ctx.lineTo(7.6, -18.6);
+    ctx.lineTo(7.6, -13.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ff5f5f';
+    ctx.beginPath();
+    ctx.arc(0, -16.6, 1.6, 0, SKIN_TAU);
+    ctx.fill();
+  } else if (sk.hat === 'band') {
+    ctx.fillStyle = sk.band[0];
+    rr(ctx, -14, -10.4, 28, 5.6, 2.8);
+    ctx.fill();
+    ctx.fillStyle = sk.band[1];
+    rr(ctx, -14, -10.4, 28, 1.8, 1.4);
+    ctx.fill();
+  } else if (sk.hat === 'beanie') {
+    ctx.fillStyle = sk.band[0];
+    ctx.beginPath();
+    ctx.arc(0, -6, 13, Math.PI * 1.02, Math.PI * 1.98);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = sk.band[1];
+    rr(ctx, -14.2, -8.6, 28.4, 4.8, 2.4);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(0, -19.4, 3.6, 0, SKIN_TAU);
+    ctx.fill();
+  }
 
   ctx.restore();
 }
 
 /* ============================================================
- *  19b. 设置面板（难度 + 皮肤）
+ *  19b. 设置面板（难度 + 皮肤 + 帧率）
  * ============================================================ */
 function drawSettings() {
   const land = isLandscape();
@@ -3956,7 +4675,8 @@ function drawSettings() {
   const headH = (land ? 190 : 198) * k;
   const footH = (land ? 58 : 62) * k;
   const rowExtra = ((land ? 34 : 38) + 27) * k;   // 「每日挑战 / 成就」这一行（含下面的小字）
-  const ch = Math.min(H * 0.94, headH + rows * chipH + (rows - 1) * gapY + footH + rowExtra);
+  const fpsRowH = (land ? 32 : 36) * k;           // 「帧率显示」开关这一行
+  const ch = Math.min(H * 0.94, headH + rows * chipH + (rows - 1) * gapY + footH + rowExtra + fpsRowH + 10 * k);
   const cx = W / 2 - cw / 2;
   const cy = H / 2 - ch / 2;
   const padX = 18 * k;
@@ -4093,6 +4813,24 @@ function drawSettings() {
     ctx.fillStyle = 'rgba(255,255,255,0.34)';
     ctx.fillText('同一套平台，全球同题', cx + cw - padX - 2 * k, ry + rh + 9 * k);
     y += rowExtra;
+  }
+
+  /* ---------------- 帧率显示 ---------------- */
+  {
+    const rw = (cw - padX * 2 - gap) / 2;
+    const rh = (land ? 30 : 34) * k;
+    const on = fpsMode > 0;
+    drawPill(cx + padX, y, rw, rh,
+      on ? 'rgba(126,233,168,0.34)' : 'rgba(255,255,255,0.12)',
+      on ? 'rgba(46,140,88,0.26)' : 'rgba(255,255,255,0.05)',
+      '帧率显示 ' + (fpsMode === 0 ? '关' : (fpsMode === 1 ? '开' : '开+毫秒')), 12 * k);
+    addHit(cx + padX, y, rw, rh, function () { setFpsMode(fpsMode ? 0 : 1); });
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.34)';
+    ctx.font = fontOf(9.5 * k);
+    ctx.fillText('点右上角胶囊也能切', cx + padX + rw + gap + 2 * k, y + rh / 2);
+    y += rh + 10 * k;
   }
 
   /* ---------------- 皮肤 ---------------- */
@@ -4304,7 +5042,7 @@ function render(now) {
 
   drawSky();
   drawStars(now);
-  drawSun();
+  drawSun(now);
   drawClouds(now);
   tileLayer(hillFar, 0.10, ty + 30, 1);
   tileLayer(hillNear, 0.20, ty + 40, 1);
@@ -4369,9 +5107,11 @@ let lastDrawAt = 0, lastLoopState = '';
 function loop(now) {
   requestAnimationFrame(loop);
 
-  let dt = (now - lastTime) / 1000;
+  const rawDt = (now - lastTime) / 1000;
+  let dt = rawDt;
   lastTime = now;
   if (dt > 0.1) dt = 0.1;
+  sampleFps(now, rawDt);          // 帧率显示用真实帧间隔，不受顿帧/降档影响
 
   if (gameState !== 'paused') {
     if (hitstop > 0) {
